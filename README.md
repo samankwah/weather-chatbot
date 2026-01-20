@@ -1,6 +1,6 @@
 # Weather Chatbot
 
-WhatsApp-based weather chatbot for Accra, Ghana users. Built with FastAPI and Twilio, designed for easy migration to Meta Cloud API.
+WhatsApp-based weather chatbot for GMet. Built with FastAPI and Twilio, designed for easy migration to Meta Cloud API.
 
 ## Features
 
