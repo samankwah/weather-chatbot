@@ -1,10 +1,30 @@
+# Web Framework
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
+python-multipart==0.0.6  # Required for FastAPI form data handling
+
+# Messaging
 twilio==8.13.0
+
+# HTTP Client
 requests==2.31.0
+httpx==0.26.0
+
+# Configuration
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
-httpx==0.26.0
+
+# Caching & Storage
 cachetools==5.3.2
+redis[hiredis]==5.0.1
+
+# AI/NLU
+groq==0.4.2
+
+# Rate Limiting
+slowapi==0.1.9
+
+# Testing
 pytest==7.4.4
 pytest-asyncio==0.23.3
+pytest-cov==4.1.0

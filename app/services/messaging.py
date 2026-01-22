@@ -1,6 +1,9 @@
 """Messaging service with provider abstraction."""
 
+import asyncio
 import logging
+import random
+import re
 from functools import lru_cache
 from typing import Protocol
 
@@ -11,6 +14,13 @@ from app.config import get_settings
 from app.models.schemas import WeatherData
 
 logger = logging.getLogger(__name__)
+
+# Typing delay configuration (in seconds)
+TYPING_DELAYS: dict[str, tuple[float, float]] = {
+    "short": (0.5, 1.0),    # Greeting/Help - quick responses
+    "medium": (1.0, 2.0),   # Weather queries
+    "long": (2.0, 3.5),     # Forecast/Seasonal - more complex data
+}
 
 
 class MessagingProvider(Protocol):
@@ -171,3 +181,174 @@ def get_weather_emoji(icon_code: str) -> str:
         "50n": "🌫️",
     }
     return emoji_map.get(icon_code, "🌡️")
+
+
+def format_whatsapp_message(
+    text: str,
+    bold_words: list[str] | None = None,
+    italic_phrases: list[str] | None = None,
+) -> str:
+    """
+    Apply WhatsApp markdown formatting to a message.
+
+    WhatsApp supports:
+    - *bold*
+    - _italic_
+    - ~strikethrough~
+    - ```monospace```
+
+    Args:
+        text: The message text to format.
+        bold_words: List of words/phrases to make bold.
+        italic_phrases: List of phrases to make italic.
+
+    Returns:
+        Formatted message with WhatsApp markdown.
+    """
+    formatted = text
+
+    # Apply bold formatting
+    if bold_words:
+        for word in bold_words:
+            # Use word boundaries to avoid partial matches
+            pattern = r'\b' + re.escape(word) + r'\b'
+            formatted = re.sub(pattern, f"*{word}*", formatted, flags=re.IGNORECASE)
+
+    # Apply italic formatting
+    if italic_phrases:
+        for phrase in italic_phrases:
+            formatted = formatted.replace(phrase, f"_{phrase}_")
+
+    return formatted
+
+
+def format_weather_response(
+    city: str,
+    temperature: float,
+    feels_like: float,
+    description: str,
+    humidity: int,
+    wind_speed: float,
+    weather_emoji: str,
+    tip: str | None = None,
+) -> str:
+    """
+    Format weather data with WhatsApp markdown for a conversational response.
+
+    Args:
+        city: City name.
+        temperature: Temperature in Celsius.
+        feels_like: Feels like temperature.
+        description: Weather description.
+        humidity: Humidity percentage.
+        wind_speed: Wind speed in km/h.
+        weather_emoji: Emoji for weather condition.
+        tip: Optional tip text.
+
+    Returns:
+        Formatted WhatsApp message.
+    """
+    msg = f"*{city} Weather* {weather_emoji}\n\n"
+    msg += f"It's *{temperature:.0f}°C* (feels like {feels_like:.0f}°C)\n"
+    msg += f"{weather_emoji} {description.capitalize()}\n"
+    msg += f"💧 {humidity}% | 💨 {wind_speed:.0f} km/h"
+
+    if tip:
+        msg += f"\n\n_💡 {tip}_"
+
+    return msg
+
+
+def get_weather_tip(
+    temperature: float,
+    humidity: int,
+    description: str,
+) -> str:
+    """
+    Generate a contextual weather tip based on conditions.
+
+    Args:
+        temperature: Temperature in Celsius.
+        humidity: Humidity percentage.
+        description: Weather description.
+
+    Returns:
+        Weather tip string.
+    """
+    desc_lower = description.lower()
+
+    # Rain conditions
+    if any(word in desc_lower for word in ["rain", "drizzle", "shower"]):
+        return "Grab an umbrella if heading out!"
+
+    # Storm conditions
+    if any(word in desc_lower for word in ["storm", "thunder"]):
+        return "Stay indoors if possible - stormy weather!"
+
+    # Hot conditions
+    if temperature >= 35:
+        return "Very hot! Stay hydrated and take breaks in shade."
+    if temperature >= 32:
+        return "Quite warm today - perfect for early morning fieldwork."
+
+    # High humidity
+    if humidity >= 80:
+        return "High humidity - good for transplanting seedlings!"
+    if humidity <= 40:
+        return "Dry air today - consider irrigation for crops."
+
+    # Clear/sunny
+    if any(word in desc_lower for word in ["clear", "sunny"]):
+        return "Beautiful day! Great for outdoor work."
+
+    # Cloudy
+    if any(word in desc_lower for word in ["cloud", "overcast"]):
+        return "Cloudy but comfortable - good working weather!"
+
+    # Default
+    return "Have a productive day!"
+
+
+async def simulate_typing_delay(
+    response_length: int,
+    complexity: str = "medium",
+) -> None:
+    """
+    Add realistic typing delay based on response complexity.
+
+    This simulates human-like typing behavior for a better UX.
+
+    Args:
+        response_length: Length of the response message.
+        complexity: "short", "medium", or "long" based on query type.
+    """
+    min_delay, max_delay = TYPING_DELAYS.get(complexity, TYPING_DELAYS["medium"])
+
+    # Adjust based on response length (longer = more delay)
+    length_factor = min(response_length / 200, 1.0)  # Cap at 200 chars
+    adjusted_min = min_delay + (length_factor * 0.5)
+    adjusted_max = max_delay + (length_factor * 0.5)
+
+    delay = random.uniform(adjusted_min, adjusted_max)
+    await asyncio.sleep(delay)
+
+
+def get_complexity_for_query(query_type: str) -> str:
+    """
+    Determine response complexity based on query type.
+
+    Args:
+        query_type: The type of query (e.g., "weather", "forecast", "greeting").
+
+    Returns:
+        Complexity level: "short", "medium", or "long".
+    """
+    short_queries = {"greeting", "help"}
+    long_queries = {"forecast", "seasonal", "seasonal_onset", "seasonal_cessation",
+                    "dry_spell", "season_length", "crop_advice", "dekadal"}
+
+    if query_type in short_queries:
+        return "short"
+    elif query_type in long_queries:
+        return "long"
+    return "medium"
