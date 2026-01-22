@@ -1,6 +1,10 @@
 # AI Agro-Weather Chatbot for Ghana Farmers
 
+<<<<<<< HEAD
 An AI-powered WhatsApp chatbot providing agricultural weather information for farmers in Ghana. Uses natural language processing to understand queries and provides weather forecasts, crop advice, and Ghana-specific seasonal information including onset/cessation predictions.
+=======
+WhatsApp-based weather chatbot for GMet. Built with FastAPI and Twilio, designed for easy migration to Meta Cloud API.
+>>>>>>> 0b8ed1d82eb90c0e7d97675cc81ba9464a8d24e5
 
 ## Features
 
