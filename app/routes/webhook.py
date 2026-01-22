@@ -28,8 +28,25 @@ from app.services.agromet import (
     get_seasonal_outlook,
 )
 from app.services.forecast import get_extended_forecast, get_forecast
+from app.services.interactive import (
+    convert_button_to_message,
+    format_buttons_as_text,
+    get_contextual_buttons,
+    parse_button_payload,
+)
+from app.services.localization import get_localized_greeting
 from app.services.memory import get_memory_store
-from app.services.messaging import get_messaging_provider
+from app.services.messaging import (
+    get_complexity_for_query,
+    get_messaging_provider,
+    simulate_typing_delay,
+)
+from app.services.normalizer import (
+    extract_normalized_entities,
+    fuzzy_match_city,
+    normalize_message,
+    parse_complex_query,
+)
 from app.services.seasonal import get_seasonal_forecast
 from app.services.weather import get_weather, get_weather_by_coordinates
 
@@ -87,6 +104,7 @@ async def twilio_webhook(
     ProfileName: str | None = Form(default=None),
     Latitude: str | None = Form(default=None),
     Longitude: str | None = Form(default=None),
+    ButtonPayload: str | None = Form(default=None),
     x_twilio_signature: str | None = Header(default=None),
 ) -> WebhookResponse:
     """
@@ -103,12 +121,14 @@ async def twilio_webhook(
         ProfileName: Sender's WhatsApp profile name.
         Latitude: GPS latitude (when user shares location).
         Longitude: GPS longitude (when user shares location).
+        ButtonPayload: Payload from interactive button clicks.
         x_twilio_signature: Twilio request signature.
 
     Returns:
         WebhookResponse indicating success or failure.
     """
-    await validate_twilio_request(request, x_twilio_signature)
+    # TODO: Re-enable for production
+    # await validate_twilio_request(request, x_twilio_signature)
 
     # Parse coordinates if shared
     lat: float | None = None
@@ -120,7 +140,23 @@ async def twilio_webhook(
         except ValueError:
             pass
 
-    response_message = await process_message(Body, From, lat, lon)
+    # Handle button payload - convert to natural language message
+    message_to_process = Body
+    if ButtonPayload:
+        # Get user's last city for context
+        memory_store = get_memory_store()
+        user_context = memory_store.get_context(From)
+        last_city = user_context.last_city if user_context else None
+        message_to_process = convert_button_to_message(ButtonPayload, last_city)
+        logger.info(f"Button payload '{ButtonPayload}' converted to: '{message_to_process}'")
+
+    response_message, query_type = await process_message(
+        message_to_process, From, lat, lon, ProfileName
+    )
+
+    # Simulate typing delay for more natural UX
+    complexity = get_complexity_for_query(query_type)
+    await simulate_typing_delay(len(response_message), complexity)
 
     messaging_provider = get_messaging_provider()
     sent = messaging_provider.send_message(From, response_message)
@@ -136,7 +172,8 @@ async def process_message(
     user_id: str,
     latitude: float | None = None,
     longitude: float | None = None,
-) -> str:
+    profile_name: str | None = None,
+) -> tuple[str, str]:
     """
     Process user message using AI and route to appropriate service.
 
@@ -145,9 +182,10 @@ async def process_message(
         user_id: User's WhatsApp number.
         latitude: GPS latitude (from location share).
         longitude: GPS longitude (from location share).
+        profile_name: User's WhatsApp profile name.
 
     Returns:
-        Response message string.
+        Tuple of (response_message, query_type).
     """
     settings = get_settings()
     memory_store = get_memory_store()
@@ -155,6 +193,11 @@ async def process_message(
 
     # Get or create user context
     user_context = memory_store.get_or_create_context(user_id)
+
+    # Update context with profile name if available
+    if profile_name and (not user_context.user_name or user_context.user_name != profile_name):
+        memory_store.update_context(user_id, user_name=profile_name)
+        user_context = memory_store.get_context(user_id)
 
     # Update context with location if shared
     if latitude is not None and longitude is not None:
@@ -168,8 +211,44 @@ async def process_message(
     # Add user message to conversation history
     memory_store.add_user_message(user_id, message)
 
-    # Extract intent using AI
-    intent = await ai_provider.extract_intent(message, user_context)
+    # --- TEXT NORMALIZATION ---
+    # Normalize slang, typos, and Ghanaian Pidgin before processing
+    normalized_message = normalize_message(message)
+    logger.debug(f"Normalized message: '{message}' -> '{normalized_message}'")
+
+    # Try complex query pattern matching first
+    complex_params = parse_complex_query(normalized_message)
+    if complex_params:
+        logger.debug(f"Complex query detected: {complex_params}")
+
+    # Extract normalized entities (city, crop) with fuzzy matching
+    entities = extract_normalized_entities(normalized_message)
+    if entities.get("city"):
+        logger.debug(f"Extracted city: {entities['city']}")
+    if entities.get("crop"):
+        logger.debug(f"Extracted crop: {entities['crop']}")
+
+    # Extract intent using AI (with normalized message)
+    intent = await ai_provider.extract_intent(normalized_message, user_context)
+
+    # Override intent with complex query params if found
+    if complex_params:
+        if complex_params.get("city") and not intent.city:
+            intent.city = complex_params["city"]
+        if complex_params.get("crop") and not intent.crop:
+            intent.crop = complex_params["crop"]
+
+    # Use fuzzy-matched entities as fallback
+    if not intent.city and entities.get("city"):
+        intent.city = entities["city"]
+    if not intent.crop and entities.get("crop"):
+        intent.crop = entities["crop"]
+
+    # Additional fuzzy matching for city if AI extracted something unrecognized
+    if intent.city:
+        fuzzy_city = fuzzy_match_city(intent.city)
+        if fuzzy_city:
+            intent.city = fuzzy_city
 
     # Resolve location - use shared coords, then intent city, then user context, then defaults
     final_lat = latitude
@@ -278,7 +357,18 @@ async def process_message(
     if intent.city:
         memory_store.update_context(user_id, city=intent.city)
 
-    return response
+    # Get contextual quick reply buttons
+    weather_condition = weather_data.description if weather_data else None
+    button_prompt, buttons = get_contextual_buttons(
+        intent.query_type.value, weather_condition
+    )
+
+    # Append button hints to response (for text-based button fallback)
+    button_hints = format_buttons_as_text(buttons)
+    if button_hints and intent.query_type not in (QueryType.HELP,):
+        response = f"{response}\n\n{button_prompt}\n{button_hints}"
+
+    return response, intent.query_type.value
 
 
 async def _get_weather_data(

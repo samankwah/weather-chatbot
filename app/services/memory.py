@@ -33,6 +33,7 @@ class MemoryStore(Protocol):
         latitude: float | None = None,
         longitude: float | None = None,
         crop: str | None = None,
+        user_name: str | None = None,
         message: str | None = None,
         role: str = "user",
     ) -> UserContext:
@@ -94,6 +95,7 @@ class InMemoryStore:
         latitude: float | None = None,
         longitude: float | None = None,
         crop: str | None = None,
+        user_name: str | None = None,
         message: str | None = None,
         role: str = "user",
     ) -> UserContext:
@@ -106,6 +108,7 @@ class InMemoryStore:
             latitude: Latitude to update (if provided).
             longitude: Longitude to update (if provided).
             crop: Crop preference to update (if provided).
+            user_name: User's profile name (if provided).
             message: Message to add to conversation history.
             role: Role for the message (user or assistant).
 
@@ -125,6 +128,8 @@ class InMemoryStore:
             context.last_longitude = longitude
         if crop:
             context.preferred_crop = crop
+        if user_name:
+            context.user_name = user_name
 
         if message:
             turn = ConversationTurn(
@@ -290,6 +295,7 @@ class RedisMemoryStore:
         latitude: float | None = None,
         longitude: float | None = None,
         crop: str | None = None,
+        user_name: str | None = None,
         message: str | None = None,
         role: str = "user",
     ) -> UserContext:
@@ -302,6 +308,7 @@ class RedisMemoryStore:
             latitude: Latitude to update (if provided).
             longitude: Longitude to update (if provided).
             crop: Crop preference to update (if provided).
+            user_name: User's profile name (if provided).
             message: Message to add to conversation history.
             role: Role for the message (user or assistant).
 
@@ -321,6 +328,8 @@ class RedisMemoryStore:
             context.last_longitude = longitude
         if crop:
             context.preferred_crop = crop
+        if user_name:
+            context.user_name = user_name
 
         if message:
             turn = ConversationTurn(

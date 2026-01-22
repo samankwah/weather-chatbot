@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_whatsapp_number: str
 
+    # Twilio Content Templates (for interactive buttons - optional)
+    twilio_content_sid_welcome: str | None = None
+    twilio_content_sid_weather: str | None = None
+    twilio_content_sid_location: str | None = None
+
     # Weather API Configuration
     weather_api_key: str
     weather_api_url: str = "https://api.openweathermap.org/data/2.5/weather"
@@ -45,6 +50,14 @@ class Settings(BaseSettings):
     default_country: str = "Ghana"
     default_latitude: float = 5.6037
     default_longitude: float = -0.1870
+
+    # Typing Delay Settings (for natural UX)
+    typing_delay_enabled: bool = True
+    typing_delay_min: float = 0.5
+    typing_delay_max: float = 2.0
+
+    # Localization Settings
+    default_language: str = "en"
 
     @property
     def twilio_whatsapp_from(self) -> str:

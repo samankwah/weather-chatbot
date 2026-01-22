@@ -53,9 +53,13 @@ class TimeOfDay(str, Enum):
 class TimeReference(BaseModel):
     """Model for time references in user queries."""
 
-    reference: str = "now"  # now, today, tomorrow, this_week, next_week
+    reference: str = "now"  # now, today, tomorrow, this_week, next_week, weekend
     time_of_day: Optional[TimeOfDay] = None
     days_ahead: int = 0
+    specific_day: Optional[str] = None  # e.g., "saturday", "monday"
+    is_weekend: bool = False
+    date_range_start: Optional[int] = None  # days ahead for range start
+    date_range_end: Optional[int] = None  # days ahead for range end
 
 
 class IntentExtraction(BaseModel):
@@ -83,10 +87,13 @@ class UserContext(BaseModel):
     """Model for user context/memory storage."""
 
     user_id: str
+    user_name: Optional[str] = None  # WhatsApp ProfileName for personalized greetings
     last_city: Optional[str] = None
     last_latitude: Optional[float] = None
     last_longitude: Optional[float] = None
     preferred_crop: Optional[str] = None
+    preferred_language: Optional[str] = None  # e.g., "en", "tw", "ga", "ee", "dag"
+    last_query_type: Optional[str] = None  # Track last query for contextual buttons
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
     last_interaction: datetime = Field(default_factory=datetime.now)
 

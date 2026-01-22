@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import date, datetime
 from typing import Protocol
 
 from groq import AsyncGroq
@@ -16,6 +17,7 @@ from app.models.ai_schemas import (
     QueryType,
     SeasonalForecast,
     SeasonalOutlook,
+    TimeOfDay,
     TimeReference,
     UserContext,
 )
@@ -49,67 +51,475 @@ class AIProvider(Protocol):
         ...
 
 
-INTENT_EXTRACTION_PROMPT = """You are a parser for a Ghanaian agricultural weather chatbot.
-Extract structured JSON from user messages.
+INTENT_EXTRACTION_PROMPT = """You are an expert NLU parser for a Ghanaian agricultural weather chatbot.
 
-Query types:
+TASK: Analyze the user message and extract structured intent as JSON.
+
+REASONING APPROACH:
+1. First, identify if this is a greeting, help request, or weather/agricultural query
+2. Extract any location mentioned (Ghana city names)
+3. Determine the specific query type from the categories below
+4. Identify any crop mentioned
+5. Parse time references (today, tomorrow, specific days, weekends)
+6. Assess confidence based on message clarity
+
+QUERY TYPES:
 - "weather": current conditions (default for general weather queries)
 - "forecast": future weather (hours/days ahead)
 - "eto": evapotranspiration query
 - "gdd": growing degree days
 - "soil": soil moisture
 - "seasonal": 3-6 month outlook
-- "seasonal_onset": when rainy season starts, onset, beginning of rains
-- "seasonal_cessation": when rains end, cessation, end of season
-- "dry_spell": dry spell, dry period, drought risk
-- "season_length": how long is rainy season, season duration
+- "seasonal_onset": when rainy season starts
+- "seasonal_cessation": when rains end
+- "dry_spell": dry spell or drought risk
+- "season_length": rainy season duration
 - "crop_advice": planting/farming advice
 - "dekadal": 10-day bulletin
-- "help": user needs help/instructions
-- "greeting": casual greeting (hi, hello, etc.)
+- "help": user needs instructions
+- "greeting": casual greeting
 
-Common Ghana crops: maize, rice, cassava, cocoa, tomato, pepper, yam, groundnut, sorghum, millet, plantain, cowpea
+GHANA CITIES: Accra, Kumasi, Tamale, Takoradi, Cape Coast, Sunyani, Ho, Koforidua, Tema, Wa, Bolgatanga, Sekondi, Tarkwa, Obuasi, Techiman, Nkawkaw
 
-Common Ghana cities: Accra, Kumasi, Tamale, Takoradi, Cape Coast, Sunyani, Ho, Koforidua, Tema, Wa, Bolgatanga
+CROPS: maize, rice, cassava, cocoa, tomato, pepper, yam, groundnut, sorghum, millet, plantain, cowpea
 
-Time references:
+TIME PARSING:
 - "now"/"today" -> days_ahead: 0
 - "tomorrow" -> days_ahead: 1
 - "this week" -> days_ahead: 3
 - "next week" -> days_ahead: 7
+- Specific day names -> calculate days_ahead from today
+- "weekend" -> days_ahead to Saturday, is_weekend: true
 
-Output ONLY valid JSON (no markdown, no explanation):
+DISAMBIGUATION RULES:
+- Message mentions BOTH current and future weather: use "forecast"
+- City unclear but crop mentioned: leave city as null
+- Time unclear for weather query: default to "now"
+- Message is just a city name: treat as "weather" query
+- Message mentions "season" without specifics: use "seasonal"
+
+EXAMPLES:
+
+Input: "What's the weather in Kumasi?"
+Output: {"city": "Kumasi", "query_type": "weather", "crop": null, "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.95}
+
+Input: "Will it rain tomorrow in Accra?"
+Output: {"city": "Accra", "query_type": "forecast", "crop": null, "time_reference": {"reference": "tomorrow", "days_ahead": 1}, "confidence": 0.92}
+
+Input: "When does the rainy season start in Tamale?"
+Output: {"city": "Tamale", "query_type": "seasonal_onset", "crop": null, "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.9}
+
+Input: "Check maize GDD"
+Output: {"city": null, "query_type": "gdd", "crop": "maize", "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.88}
+
+Input: "Hello"
+Output: {"city": null, "query_type": "greeting", "crop": null, "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.98}
+
+OUTPUT FORMAT (JSON only, no markdown, no explanation):
 {
   "city": "city name or null",
-  "query_type": "weather|forecast|eto|gdd|soil|seasonal|seasonal_onset|seasonal_cessation|dry_spell|season_length|crop_advice|dekadal|help|greeting",
+  "query_type": "one of the types listed above",
   "crop": "crop name or null",
-  "time_reference": {"reference": "now|today|tomorrow|this_week", "days_ahead": 0},
-  "confidence": 0.8
+  "time_reference": {"reference": "time_ref", "days_ahead": number},
+  "confidence": 0.0-1.0
 }
 
 User message: """
 
-RESPONSE_GENERATION_PROMPT = """You are a Ghanaian agricultural weather assistant. Be concise and professional.
+RESPONSE_GENERATION_PROMPT = """You are a professional agricultural weather assistant for Ghana.
 
-CRITICAL RULES:
-- Keep responses under 80 words maximum
-- Use ONE greeting max (not multiple)
-- ALWAYS use these emojis: 🌡️ temp, 💧 humidity/ETO, 💨 wind, ☀️ sunny, ⛅ cloudy, 🌧️ rain, 🌱 crops/GDD, 🪴 soil
-- Format data with emojis on separate lines
-- Give 1-2 practical tips max, not paragraphs
+ROLE: Provide accurate, helpful weather and farming information to users.
 
-Example weather format:
-☀️ Sunyani weather:
-🌡️ 33°C (feels 35°C)
-⛅ Overcast clouds
-💧 65%  💨 8 km/h
+COMMUNICATION STYLE:
+- Professional and courteous
+- Clear and concise
+- Factual without being cold
+- Use proper English
+- Be helpful and solution-oriented
 
-💡 Good for field work!
+OUTPUT REQUIREMENTS:
+- Maximum 80 words
+- Use WhatsApp markdown: *bold* for headers, _italic_ for tips
+- Include relevant emojis: 🌡️ temp, 💧 humidity, 💨 wind, ☀️ sunny, ⛅ cloudy, 🌧️ rain, 🌱 crops, 🪴 soil, ⛈️ storm
+- Provide 1-2 actionable recommendations maximum
+- Do not repeat the user's question
+- One greeting maximum (if any)
+
+FORMAT:
+1. Header line with location and condition emoji
+2. Key data points (2-3 lines)
+3. One practical tip in italics
+
+AVOID:
+- Data dumps without context
+- Repeating the user's question
+- Multiple greetings
+- Generic advice ("Have a nice day")
+
+AGRICULTURAL CONTEXT FOR GHANA:
+- Major rainy season: April-July (Southern Ghana)
+- Minor rainy season: September-November (Southern Ghana)
+- Single rainy season: May-October (Northern Ghana)
+- Harmattan season: December-February
 
 Context:
 {context}
 
-Generate a SHORT response with emojis:"""
+Generate a professional, concise response:"""
+
+# Dynamic weather emoji maps with day/night variants and tips
+WEATHER_EMOJI_MAP: dict[str, dict[str, str]] = {
+    "clear": {
+        "day": "☀️",
+        "night": "🌙",
+        "tip": "Perfect weather for outdoor activities!",
+    },
+    "clouds": {
+        "day": "⛅",
+        "night": "☁️",
+        "tip": "Good working weather - not too hot!",
+    },
+    "overcast": {
+        "day": "☁️",
+        "night": "☁️",
+        "tip": "Comfortable conditions for fieldwork.",
+    },
+    "rain": {
+        "day": "🌧️",
+        "night": "🌧️",
+        "tip": "Grab an umbrella! Good for natural irrigation.",
+    },
+    "drizzle": {
+        "day": "🌦️",
+        "night": "🌧️",
+        "tip": "Light rain - might clear up soon.",
+    },
+    "thunderstorm": {
+        "day": "⛈️",
+        "night": "⛈️",
+        "tip": "Stay indoors! Avoid open fields.",
+    },
+    "snow": {
+        "day": "❄️",
+        "night": "❄️",
+        "tip": "Unusual for Ghana - check conditions!",
+    },
+    "mist": {
+        "day": "🌫️",
+        "night": "🌫️",
+        "tip": "Low visibility - drive carefully.",
+    },
+    "fog": {
+        "day": "🌫️",
+        "night": "🌫️",
+        "tip": "Dense fog - wait for it to lift.",
+    },
+    "haze": {
+        "day": "😶‍🌫️",
+        "night": "😶‍🌫️",
+        "tip": "Harmattan haze - protect your skin!",
+    },
+    "dust": {
+        "day": "💨",
+        "night": "💨",
+        "tip": "Harmattan dust! Cover nose and mouth.",
+    },
+    "sand": {
+        "day": "💨",
+        "night": "💨",
+        "tip": "Sandy winds - protect crops if possible.",
+    },
+    "smoke": {
+        "day": "🌫️",
+        "night": "🌫️",
+        "tip": "Smoky air - limit outdoor exposure.",
+    },
+}
+
+# Temperature emoji thresholds (min_temp, max_temp) -> emoji
+TEMP_EMOJI_MAP: list[tuple[tuple[int, int], str, str]] = [
+    ((0, 15), "🥶", "Very cool - rare for Ghana!"),
+    ((15, 25), "😊", "Pleasant temperature."),
+    ((25, 30), "🌡️", "Warm and comfortable."),
+    ((30, 35), "🥵", "Hot! Stay hydrated."),
+    ((35, 40), "🔥", "Very hot! Limit outdoor work."),
+    ((40, 50), "🔥🔥", "Extreme heat! Stay indoors if possible."),
+]
+
+# Humidity emoji thresholds
+HUMIDITY_EMOJI_MAP: list[tuple[tuple[int, int], str, str]] = [
+    ((0, 30), "💨", "Dry air - irrigate crops."),
+    ((30, 50), "💧", "Comfortable humidity."),
+    ((50, 70), "💧💧", "Moderate humidity - good for most crops."),
+    ((70, 85), "💦", "High humidity - great for transplanting!"),
+    ((85, 100), "💦💦", "Very humid - watch for fungal issues."),
+]
+
+# Weather condition to emoji + display name mapping
+CONDITION_DISPLAY_MAP: dict[str, tuple[str, str]] = {
+    "clear": ("☀️", "Sunny"),
+    "sunny": ("☀️", "Sunny"),
+    "clouds": ("🌤️", "Partly Cloudy"),
+    "few clouds": ("🌤️", "Partly Cloudy"),
+    "scattered clouds": ("🌤️", "Partly Cloudy"),
+    "broken clouds": ("☁️", "Cloudy"),
+    "overcast": ("🌥️", "Overcast"),
+    "overcast clouds": ("🌥️", "Overcast"),
+    "rain": ("🌧️", "Rainy"),
+    "light rain": ("🌦️", "Light Rain"),
+    "moderate rain": ("🌧️", "Rainy"),
+    "heavy rain": ("🌧️", "Heavy Rain"),
+    "shower": ("🌧️", "Showers"),
+    "drizzle": ("🌧️", "Drizzle"),
+    "thunderstorm": ("⛈️", "Thunderstorm"),
+    "mist": ("🌫️", "Misty"),
+    "fog": ("🌫️", "Foggy"),
+    "haze": ("😶‍🌫️", "Hazy"),
+    "dust": ("💨", "Dusty"),
+    "harmattan": ("😶‍🌫️", "Harmattan"),
+    "smoke": ("🌫️", "Smoky"),
+}
+
+# General tips (for weather/forecast queries - NO farming)
+GENERAL_TIPS: dict[str, list[str]] = {
+    "hot": [
+        "Stay hydrated and seek shade during peak hours!",
+        "Hot day ahead - drink plenty of water!",
+        "Keep cool and avoid prolonged sun exposure!",
+    ],
+    "rain": [
+        "Carry an umbrella - rain expected!",
+        "Rain on the way - stay dry!",
+        "Showers expected - plan indoor activities!",
+    ],
+    "thunderstorm": [
+        "Stay indoors - thunderstorms expected!",
+        "Avoid open areas during the storm!",
+        "Seek shelter - lightning risk!",
+    ],
+    "sunny": [
+        "Perfect weather for outdoor activities!",
+        "Great day to be outside!",
+        "Enjoy the sunshine!",
+    ],
+    "cloudy": [
+        "Comfortable weather - not too hot!",
+        "Pleasant conditions today!",
+        "Nice day ahead!",
+    ],
+    "humid": [
+        "Humid today - stay cool!",
+        "Sticky weather - stay hydrated!",
+    ],
+    "harmattan": [
+        "Harmattan season - protect your skin!",
+        "Dry dusty winds - cover nose and mouth!",
+    ],
+}
+
+# Farming tips (ONLY for agro/crop queries)
+FARMING_TIPS: dict[str, list[str]] = {
+    "high_humidity": [
+        "Great conditions for transplanting seedlings!",
+        "Good moisture for young plants!",
+    ],
+    "low_humidity": [
+        "Consider irrigation - soil drying out.",
+        "Water crops in early morning or evening.",
+    ],
+    "rain_expected": [
+        "Hold off on spraying - rain will wash it away.",
+        "Natural watering on the way - save irrigation!",
+    ],
+    "sunny_dry": [
+        "Good day for harvesting or drying crops.",
+        "Ideal for post-harvest drying!",
+    ],
+    "very_hot": [
+        "Avoid fieldwork during peak heat - early morning best.",
+        "Protect workers from heat stress!",
+    ],
+    "good_planting": [
+        "Good conditions for planting!",
+        "Favorable weather for sowing seeds!",
+    ],
+}
+
+
+def get_personalized_greeting(user_name: str | None) -> str:
+    """
+    Get personalized greeting with user's name.
+
+    Args:
+        user_name: User's WhatsApp profile name.
+
+    Returns:
+        Personalized greeting string.
+    """
+    if user_name:
+        # Get first name only if full name provided
+        first_name = user_name.split()[0] if " " in user_name else user_name
+        return f"Hi {first_name}! 👋"
+    return "Hello! 👋"
+
+
+def get_condition_display(description: str, is_daytime: bool = True) -> tuple[str, str]:
+    """
+    Get emoji and display name for weather condition.
+
+    Args:
+        description: Weather description from API.
+        is_daytime: Whether it's daytime.
+
+    Returns:
+        Tuple of (emoji, display_name).
+    """
+    desc_lower = description.lower()
+
+    # Check for exact or partial matches
+    for condition, (emoji, display_name) in CONDITION_DISPLAY_MAP.items():
+        if condition in desc_lower:
+            # Night variant for clear sky
+            if condition in ("clear", "sunny") and not is_daytime:
+                return ("🌙", "Clear Night")
+            return (emoji, display_name)
+
+    # Default fallback
+    return ("🌡️", description.title())
+
+
+def get_general_tip(
+    temperature: float,
+    humidity: int,
+    description: str,
+) -> str:
+    """
+    Get general lifestyle tip based on weather conditions.
+    NO farming tips - for weather/forecast queries only.
+
+    Args:
+        temperature: Temperature in Celsius.
+        humidity: Humidity percentage.
+        description: Weather description.
+
+    Returns:
+        General weather tip string.
+    """
+    import random
+    desc_lower = description.lower()
+
+    # Check conditions in priority order
+    if "thunder" in desc_lower or "storm" in desc_lower:
+        return random.choice(GENERAL_TIPS["thunderstorm"])
+    elif "rain" in desc_lower or "shower" in desc_lower or "drizzle" in desc_lower:
+        return random.choice(GENERAL_TIPS["rain"])
+    elif temperature >= 33:
+        return random.choice(GENERAL_TIPS["hot"])
+    elif "haze" in desc_lower or "dust" in desc_lower or "harmattan" in desc_lower:
+        return random.choice(GENERAL_TIPS["harmattan"])
+    elif humidity >= 80:
+        return random.choice(GENERAL_TIPS["humid"])
+    elif "clear" in desc_lower or "sunny" in desc_lower:
+        return random.choice(GENERAL_TIPS["sunny"])
+    else:
+        return random.choice(GENERAL_TIPS["cloudy"])
+
+
+def get_farming_tip(
+    temperature: float,
+    humidity: int,
+    description: str,
+) -> str:
+    """
+    Get farming-specific tip based on weather conditions.
+    ONLY for agro/crop queries.
+
+    Args:
+        temperature: Temperature in Celsius.
+        humidity: Humidity percentage.
+        description: Weather description.
+
+    Returns:
+        Farming tip string.
+    """
+    import random
+    desc_lower = description.lower()
+
+    # Check conditions in priority order
+    if "rain" in desc_lower or "shower" in desc_lower:
+        return random.choice(FARMING_TIPS["rain_expected"])
+    elif temperature >= 35:
+        return random.choice(FARMING_TIPS["very_hot"])
+    elif humidity >= 75:
+        return random.choice(FARMING_TIPS["high_humidity"])
+    elif humidity <= 40:
+        return random.choice(FARMING_TIPS["low_humidity"])
+    elif "clear" in desc_lower or "sunny" in desc_lower:
+        return random.choice(FARMING_TIPS["sunny_dry"])
+    else:
+        return random.choice(FARMING_TIPS["good_planting"])
+
+
+def get_dynamic_emojis(
+    weather_description: str,
+    temperature: float,
+    humidity: int,
+    is_daytime: bool = True,
+) -> dict[str, str]:
+    """
+    Get dynamic emojis and tips based on weather conditions.
+
+    Args:
+        weather_description: Weather description text.
+        temperature: Temperature in Celsius.
+        humidity: Humidity percentage.
+        is_daytime: Whether it's daytime (affects emoji choice).
+
+    Returns:
+        Dict with 'condition_emoji', 'condition_tip', 'temp_emoji',
+        'temp_tip', 'humidity_emoji', 'humidity_tip' keys.
+    """
+    result = {
+        "condition_emoji": "🌡️",
+        "condition_tip": "Check local conditions.",
+        "temp_emoji": "🌡️",
+        "temp_tip": "Typical temperature.",
+        "humidity_emoji": "💧",
+        "humidity_tip": "Normal humidity.",
+    }
+
+    # Match weather condition
+    desc_lower = weather_description.lower()
+    time_key = "day" if is_daytime else "night"
+
+    for condition, data in WEATHER_EMOJI_MAP.items():
+        if condition in desc_lower:
+            result["condition_emoji"] = data[time_key]
+            result["condition_tip"] = data["tip"]
+            break
+
+    # Match temperature
+    for (min_temp, max_temp), emoji, tip in TEMP_EMOJI_MAP:
+        if min_temp <= temperature < max_temp:
+            result["temp_emoji"] = emoji
+            result["temp_tip"] = tip
+            break
+
+    # Match humidity
+    for (min_hum, max_hum), emoji, tip in HUMIDITY_EMOJI_MAP:
+        if min_hum <= humidity < max_hum:
+            result["humidity_emoji"] = emoji
+            result["humidity_tip"] = tip
+            break
+
+    return result
+
+
+def is_daytime_now() -> bool:
+    """Check if it's daytime in Ghana (WAT timezone, roughly 6 AM - 6 PM)."""
+    current_hour = datetime.now().hour
+    # Ghana is in GMT, adjust if needed
+    return 6 <= current_hour < 18
 
 
 class GroqProvider:
@@ -344,19 +754,124 @@ class GroqProvider:
         return None
 
     def _extract_time_fallback(self, message: str) -> TimeReference:
-        """Extract time reference from message."""
+        """Extract time reference from message with enhanced parsing."""
         message_lower = message.lower()
+        today = date.today()
+        today_weekday = today.weekday()  # Monday = 0, Sunday = 6
 
-        if "tomorrow" in message_lower:
-            return TimeReference(reference="tomorrow", days_ahead=1)
+        # Day name mapping
+        day_names = {
+            "monday": 0, "mon": 0,
+            "tuesday": 1, "tue": 1, "tues": 1,
+            "wednesday": 2, "wed": 2, "weds": 2,
+            "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+            "friday": 4, "fri": 4,
+            "saturday": 5, "sat": 5,
+            "sunday": 6, "sun": 6,
+        }
+
+        # Extract time of day
+        time_of_day: TimeOfDay | None = None
+        if any(word in message_lower for word in ["morning", "mornin", "am", "dawn", "sunrise"]):
+            time_of_day = TimeOfDay.MORNING
+        elif any(word in message_lower for word in ["afternoon", "midday", "noon", "pm"]):
+            time_of_day = TimeOfDay.AFTERNOON
+        elif any(word in message_lower for word in ["evening", "evenin", "dusk", "sunset"]):
+            time_of_day = TimeOfDay.EVENING
+        elif any(word in message_lower for word in ["night", "nite", "tonight", "midnight"]):
+            time_of_day = TimeOfDay.NIGHT
+
+        # Check for weekend
+        if any(word in message_lower for word in ["weekend", "wknd", "wkd"]):
+            # Calculate days to Saturday
+            days_to_saturday = (5 - today_weekday) % 7
+            if days_to_saturday == 0 and today_weekday == 5:
+                days_to_saturday = 0  # Today is Saturday
+            elif today_weekday == 6:
+                days_to_saturday = 6  # Today is Sunday, next Saturday
+
+            return TimeReference(
+                reference="weekend",
+                time_of_day=time_of_day,
+                days_ahead=days_to_saturday,
+                specific_day="saturday",
+                is_weekend=True,
+                date_range_start=days_to_saturday,
+                date_range_end=days_to_saturday + 1,  # Saturday and Sunday
+            )
+
+        # Check for specific day names with "next" prefix
+        for day_name, day_num in day_names.items():
+            if f"next {day_name}" in message_lower:
+                # Calculate days ahead (always next week's occurrence)
+                days_ahead = (day_num - today_weekday) % 7
+                if days_ahead == 0:
+                    days_ahead = 7  # Same day next week
+                else:
+                    days_ahead += 7  # Next week's occurrence
+
+                return TimeReference(
+                    reference="next_week",
+                    time_of_day=time_of_day,
+                    days_ahead=days_ahead,
+                    specific_day=day_name.split()[0] if " " not in day_name else day_name,
+                    is_weekend=day_num in (5, 6),
+                )
+
+        # Check for specific day names (this week)
+        for day_name, day_num in day_names.items():
+            if day_name in message_lower:
+                # Calculate days ahead
+                days_ahead = (day_num - today_weekday) % 7
+                if days_ahead == 0 and day_num != today_weekday:
+                    days_ahead = 7  # Same day name but means next week
+
+                return TimeReference(
+                    reference="this_week",
+                    time_of_day=time_of_day,
+                    days_ahead=days_ahead,
+                    specific_day=day_name,
+                    is_weekend=day_num in (5, 6),
+                )
+
+        # Standard time references
+        if "tomorrow" in message_lower or "tmrw" in message_lower or "2moro" in message_lower:
+            return TimeReference(
+                reference="tomorrow",
+                time_of_day=time_of_day,
+                days_ahead=1,
+            )
         elif "next week" in message_lower:
-            return TimeReference(reference="next_week", days_ahead=7)
+            return TimeReference(
+                reference="next_week",
+                time_of_day=time_of_day,
+                days_ahead=7,
+            )
         elif "this week" in message_lower:
-            return TimeReference(reference="this_week", days_ahead=3)
-        elif "today" in message_lower or "now" in message_lower:
-            return TimeReference(reference="today", days_ahead=0)
+            return TimeReference(
+                reference="this_week",
+                time_of_day=time_of_day,
+                days_ahead=3,
+            )
+        elif "today" in message_lower or "now" in message_lower or "2day" in message_lower:
+            return TimeReference(
+                reference="today",
+                time_of_day=time_of_day,
+                days_ahead=0,
+            )
+        elif "tonight" in message_lower or "2nite" in message_lower:
+            return TimeReference(
+                reference="today",
+                time_of_day=TimeOfDay.NIGHT,
+                days_ahead=0,
+            )
 
-        return TimeReference(reference="now", days_ahead=0)
+        # Default - include time of day if extracted
+        return TimeReference(
+            reference="now",
+            time_of_day=time_of_day,
+            days_ahead=0,
+        )
 
     async def generate_response(
         self,
@@ -370,7 +885,11 @@ class GroqProvider:
         user_context: UserContext | None = None,
     ) -> str:
         """
-        Generate a friendly response using Groq.
+        Generate a friendly response using template format.
+
+        For weather and forecast queries, ALWAYS uses the template format
+        to ensure consistent, professional output. AI is only used for
+        complex queries like crop advice.
 
         Args:
             intent: Extracted intent from user message.
@@ -385,10 +904,34 @@ class GroqProvider:
         Returns:
             Friendly response string.
         """
+        # ALWAYS use template for weather/forecast/greeting/help - consistent format
+        template_query_types = (
+            QueryType.WEATHER,
+            QueryType.FORECAST,
+            QueryType.GREETING,
+            QueryType.HELP,
+            QueryType.ETO,
+            QueryType.GDD,
+            QueryType.SOIL,
+            QueryType.SEASONAL,
+            QueryType.SEASONAL_ONSET,
+            QueryType.SEASONAL_CESSATION,
+            QueryType.DRY_SPELL,
+            QueryType.SEASON_LENGTH,
+            QueryType.DEKADAL,
+        )
+
+        if intent.query_type in template_query_types:
+            return self._generate_template_response(
+                intent, weather_data, forecast_data, agromet_data, gdd_data,
+                seasonal_data, seasonal_forecast, user_context
+            )
+
+        # Use AI only for complex queries (crop advice)
         if not self.ai_enabled:
             return self._generate_template_response(
                 intent, weather_data, forecast_data, agromet_data, gdd_data,
-                seasonal_data, seasonal_forecast
+                seasonal_data, seasonal_forecast, user_context
             )
 
         context = self._build_context(
@@ -415,7 +958,7 @@ class GroqProvider:
             logger.warning(f"Groq response generation failed: {e}, using template")
             return self._generate_template_response(
                 intent, weather_data, forecast_data, agromet_data, gdd_data,
-                seasonal_data, seasonal_forecast
+                seasonal_data, seasonal_forecast, user_context
             )
 
     def _build_context(
@@ -652,64 +1195,105 @@ class GroqProvider:
         gdd_data: GDDData | None = None,
         seasonal_data: SeasonalOutlook | None = None,
         seasonal_forecast: SeasonalForecast | None = None,
+        user_context: UserContext | None = None,
     ) -> str:
         """Generate template-based response as fallback."""
         city = intent.city
 
+        # Get personalized greeting
+        user_name = user_context.user_name if user_context else None
+        greeting = get_personalized_greeting(user_name)
+
+        # Determine if this is an agro query (for tip selection)
+        is_agro_query = intent.query_type in (
+            QueryType.CROP_ADVICE, QueryType.SOIL, QueryType.ETO,
+            QueryType.GDD, QueryType.SEASONAL, QueryType.DEKADAL,
+            QueryType.SEASONAL_ONSET, QueryType.SEASONAL_CESSATION,
+            QueryType.DRY_SPELL, QueryType.SEASON_LENGTH,
+        )
+
         if intent.query_type == QueryType.GREETING:
-            greeting = self._get_greeting(city)
             return (
-                f"👋 {greeting} I'm your agri-weather assistant.\n\n"
-                "☀️ Weather  💧 ETO  🌱 GDD\n"
-                "🪴 Soil  🗓️ Seasonal outlook\n\n"
-                "Ask me anything!"
+                f"{greeting}\n\n"
+                "I'm your weather assistant. I can help with:\n"
+                "☀️ Weather  📅 Forecasts  🌱 Farming advice\n\n"
+                "What would you like to know?"
             )
 
         if intent.query_type == QueryType.HELP:
             return (
-                "ℹ️ Commands:\n"
-                '☀️ "weather Kumasi"\n'
-                '📅 "forecast tomorrow"\n'
-                '💧 "ETO today"\n'
-                '🌱 "GDD maize"\n'
-                '🪴 "soil moisture"'
+                f"{greeting}\n\n"
+                "ℹ️ *How to use:*\n"
+                '☀️ "weather in Kumasi"\n'
+                '📅 "forecast for tomorrow"\n'
+                '🌱 "crop advice for maize"\n'
+                '🪴 "soil moisture"\n\n'
+                "Just ask naturally!"
             )
 
         # Route to query-specific seasonal responses FIRST
         if intent.query_type == QueryType.SEASONAL_ONSET and seasonal_forecast:
-            return self._format_onset_response(seasonal_forecast)
+            return f"{greeting}\n\n" + self._format_onset_response(seasonal_forecast)
 
         if intent.query_type == QueryType.SEASONAL_CESSATION and seasonal_forecast:
-            return self._format_cessation_response(seasonal_forecast)
+            return f"{greeting}\n\n" + self._format_cessation_response(seasonal_forecast)
 
         if intent.query_type == QueryType.DRY_SPELL and seasonal_forecast:
-            return self._format_dry_spell_response(seasonal_forecast)
+            return f"{greeting}\n\n" + self._format_dry_spell_response(seasonal_forecast)
 
         if intent.query_type == QueryType.SEASON_LENGTH and seasonal_forecast:
-            return self._format_season_length_response(seasonal_forecast)
+            return f"{greeting}\n\n" + self._format_season_length_response(seasonal_forecast)
 
         if weather_data:
-            intro = self._get_weather_intro(weather_data.city)
-            weather_icon = self._get_weather_icon(weather_data.description)
+            # Get condition emoji and display name
+            condition_emoji, condition_name = get_condition_display(
+                weather_data.description, is_daytime_now()
+            )
+
+            # Get appropriate tip based on query type
+            if is_agro_query:
+                tip = get_farming_tip(
+                    weather_data.temperature,
+                    weather_data.humidity,
+                    weather_data.description,
+                )
+            else:
+                tip = get_general_tip(
+                    weather_data.temperature,
+                    weather_data.humidity,
+                    weather_data.description,
+                )
+
             return (
-                f"☀️ {intro}{weather_data.city} weather:\n\n"
-                f"🌡️ {weather_data.temperature:.1f}°C (feels {weather_data.feels_like:.1f}°C)\n"
-                f"{weather_icon} {weather_data.description.capitalize()}\n"
-                f"💧 {weather_data.humidity}%  💨 {weather_data.wind_speed} km/h"
+                f"{greeting}\n\n"
+                f"{condition_emoji} *{condition_name}* in {weather_data.city}\n"
+                f"{weather_data.temperature:.0f}°C (feels like {weather_data.feels_like:.0f}°C)\n"
+                f"💧 Humidity: {weather_data.humidity}%\n"
+                f"🌬️ Wind: {weather_data.wind_speed:.0f} km/h\n\n"
+                f"_💡 {tip}_"
             )
 
         if forecast_data and forecast_data.periods:
-            lines = [f"📅 {forecast_data.city} Forecast\n"]
+            lines = [f"{greeting}\n\n📅 *Forecast* for {forecast_data.city}\n"]
             for period in forecast_data.periods[:5]:
-                weather_icon = self._get_weather_icon(period.description)
+                condition_emoji, _ = get_condition_display(period.description)
                 lines.append(
-                    f"{period.datetime_str}: {weather_icon} {period.temperature:.1f}°C"
+                    f"*{period.datetime_str}:* {condition_emoji} {period.temperature:.0f}°C - {period.description.capitalize()}"
                 )
+
+            # Add general tip for forecast
+            first_period = forecast_data.periods[0]
+            tip = get_general_tip(
+                first_period.temperature,
+                first_period.humidity,
+                first_period.description,
+            )
+            lines.append(f"\n_💡 {tip}_")
             return "\n".join(lines)
 
         if agromet_data and agromet_data.daily_data:
             today = agromet_data.daily_data[0]
-            msg = f"🌱 Agro Data - {today.date}\n\n"
+            msg = f"{greeting}\n\n🌱 *Agro Data* - {today.date}\n\n"
             if today.eto is not None:
                 msg += f"💧 ETO: {today.eto:.2f}mm\n"
             if today.temp_max is not None:
@@ -721,7 +1305,7 @@ class GroqProvider:
             return msg
 
         if gdd_data:
-            msg = f"📈 {gdd_data.crop.title()} GDD\n\n"
+            msg = f"{greeting}\n\n📈 *{gdd_data.crop.title()} GDD*\n\n"
             msg += f"Accumulated: {gdd_data.accumulated_gdd:.0f}\n"
             msg += f"Stage: {gdd_data.current_stage}\n"
             if gdd_data.next_stage:
@@ -730,7 +1314,8 @@ class GroqProvider:
 
         if seasonal_data:
             return (
-                "🗓️ Seasonal Outlook\n\n"
+                f"{greeting}\n\n"
+                "🗓️ *Seasonal Outlook*\n\n"
                 f"🌡️ Temp: {seasonal_data.temperature_trend}\n"
                 f"🌧️ Rain: {seasonal_data.precipitation_trend}\n\n"
                 f"{seasonal_data.summary}"
@@ -744,7 +1329,7 @@ class GroqProvider:
                 "single": "Single Season",
             }.get(seasonal_forecast.season_type.value, seasonal_forecast.season_type.value)
 
-            msg = f"🌍 {region_name} Ghana - {season_name}\n\n"
+            msg = f"{greeting}\n\n🌍 *{region_name} Ghana* - {season_name}\n\n"
 
             if seasonal_forecast.onset_date:
                 onset_emoji = "✅" if seasonal_forecast.onset_status == "occurred" else "📅"
@@ -762,10 +1347,11 @@ class GroqProvider:
                 msg += f"\n☀️ Early dry spell: {ds.early_dry_spell_days} days\n"
                 msg += f"☀️ Late dry spell: {ds.late_dry_spell_days} days\n"
 
-            msg += f"\n💡 {seasonal_forecast.farming_advice}"
+            msg += f"\n_💡 {seasonal_forecast.farming_advice}_"
             return msg
 
         return (
+            f"{greeting}\n\n"
             "I couldn't find that info. "
             "Try asking about weather, forecasts, or farming advice!"
         )

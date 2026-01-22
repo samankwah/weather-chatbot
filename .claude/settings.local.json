@@ -9,7 +9,12 @@
       "WebFetch(domain:openmeteo.substack.com)",
       "mcp__ide__getDiagnostics",
       "Bash(python -m py_compile:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:www.twilio.com)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill //F //PID 20388)",
+      "Bash(taskkill //F //PID 18912)"
     ]
   }
 }
