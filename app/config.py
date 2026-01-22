@@ -22,10 +22,29 @@ class Settings(BaseSettings):
     # Weather API Configuration
     weather_api_key: str
     weather_api_url: str = "https://api.openweathermap.org/data/2.5/weather"
+    weather_forecast_url: str = "https://api.openweathermap.org/data/2.5/forecast"
+
+    # Groq AI Configuration (optional - falls back to keyword parsing if not set)
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_timeout: float = 10.0
+
+    # Open-Meteo Configuration (FREE - no API key needed)
+    open_meteo_base_url: str = "https://api.open-meteo.com/v1"
+    open_meteo_forecast_days: int = 16
+
+    # Memory Configuration
+    memory_ttl_seconds: int = 3600
+
+    # Redis Configuration
+    redis_url: str = "redis://localhost:6379"
+    use_redis: bool = False
 
     # Application Settings
     default_city: str = "Accra"
     default_country: str = "Ghana"
+    default_latitude: float = 5.6037
+    default_longitude: float = -0.1870
 
     @property
     def twilio_whatsapp_from(self) -> str:
