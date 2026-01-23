@@ -15,7 +15,8 @@
       "Bash(findstr:*)",
       "Bash(taskkill //F //PID 20388)",
       "Bash(taskkill //F //PID 18912)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git add:*)"
     ]
   }
 }
