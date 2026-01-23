@@ -47,11 +47,18 @@ class LocationInput(BaseModel):
     city: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    confidence: float = 0.0
+    source: str = "unknown"  # "gps", "geocoded", "user_context", "home"
 
     @property
     def has_coordinates(self) -> bool:
         """Check if coordinates are available."""
         return self.latitude is not None and self.longitude is not None
+
+    @property
+    def is_confident(self) -> bool:
+        """Check if location confidence is above threshold (0.7)."""
+        return self.confidence >= 0.7
 
 
 class ChatMessage(BaseModel):

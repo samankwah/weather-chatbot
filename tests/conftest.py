@@ -54,12 +54,22 @@ def mock_settings() -> MagicMock:
     settings.open_meteo_base_url = "https://api.open-meteo.com/v1"
     settings.open_meteo_forecast_days = 16
     settings.memory_ttl_seconds = 3600
-    settings.default_city = "Accra"
-    settings.default_country = "Ghana"
-    settings.default_latitude = 5.6037
-    settings.default_longitude = -0.1870
-    settings.default_location = "Accra,Ghana"
+    # Geocoding settings
+    settings.nominatim_base_url = "https://nominatim.openstreetmap.org"
+    settings.nominatim_user_agent = "weather-chatbot/1.0"
+    settings.geocoding_cache_ttl = 86400
+    settings.geocoding_confidence_threshold = 0.7
+    settings.default_country_bias = "Ghana"
     return settings
+
+
+@pytest.fixture(autouse=True)
+def clear_weather_cache():
+    """Clear weather cache before each test to ensure isolation."""
+    from app.services.weather import weather_cache
+    weather_cache.clear()
+    yield
+    weather_cache.clear()
 
 
 @pytest.fixture
@@ -322,15 +332,18 @@ def mock_request_validator():
 def mock_memory_store():
     """Create mock memory store."""
     store = MagicMock()
-    store.get_context.return_value = None
-    store.get_or_create_context.return_value = UserContext(
-        user_id="whatsapp:+233201234567"
-    )
-    store.update_context.return_value = UserContext(user_id="whatsapp:+233201234567")
-    store.add_user_message.return_value = UserContext(user_id="whatsapp:+233201234567")
-    store.add_assistant_message.return_value = UserContext(
-        user_id="whatsapp:+233201234567"
-    )
+    user_context = UserContext(user_id="whatsapp:+233201234567")
+    store.get_context.return_value = user_context
+    store.get_or_create_context.return_value = user_context
+    store.update_context.return_value = user_context
+    store.add_user_message.return_value = user_context
+    store.add_assistant_message.return_value = user_context
+    # New geocoding-related methods
+    store.get_pending_clarification.return_value = None
+    store.set_pending_clarification.return_value = user_context
+    store.clear_pending_clarification.return_value = user_context
+    store.set_home_location.return_value = user_context
+    store.get_home_location.return_value = None
     return store
 
 

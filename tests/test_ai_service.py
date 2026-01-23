@@ -292,7 +292,8 @@ class TestTemplateResponseGeneration:
             intent, weather_data=weather_data
         )
         assert "Accra" in response
-        assert "30.5" in response
+        # Temperature is displayed rounded (30°C) not as decimal (30.5)
+        assert "30" in response
         assert "75" in response
 
     def test_generate_fallback_response(self) -> None:

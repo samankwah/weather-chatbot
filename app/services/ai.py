@@ -1075,6 +1075,7 @@ class GroqProvider:
         seasonal_data: SeasonalOutlook | None = None,
         seasonal_forecast: SeasonalForecast | None = None,
         user_context: UserContext | None = None,
+        skip_greeting: bool = False,
     ) -> str:
         """
         Generate a friendly response using template format.
@@ -1092,6 +1093,7 @@ class GroqProvider:
             seasonal_data: Seasonal outlook if available.
             seasonal_forecast: Ghana-specific seasonal forecast if available.
             user_context: User context for personalization.
+            skip_greeting: If True, omit the greeting (for follow-up queries).
 
         Returns:
             Friendly response string.
@@ -1116,14 +1118,14 @@ class GroqProvider:
         if intent.query_type in template_query_types:
             return self._generate_template_response(
                 intent, weather_data, forecast_data, agromet_data, gdd_data,
-                seasonal_data, seasonal_forecast, user_context
+                seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
         # Use AI only for complex queries (crop advice)
         if not self.ai_enabled:
             return self._generate_template_response(
                 intent, weather_data, forecast_data, agromet_data, gdd_data,
-                seasonal_data, seasonal_forecast, user_context
+                seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
         context = self._build_context(
@@ -1150,7 +1152,7 @@ class GroqProvider:
             logger.warning(f"Groq response generation failed: {e}, using template")
             return self._generate_template_response(
                 intent, weather_data, forecast_data, agromet_data, gdd_data,
-                seasonal_data, seasonal_forecast, user_context
+                seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
     def _build_context(
@@ -1388,13 +1390,17 @@ class GroqProvider:
         seasonal_data: SeasonalOutlook | None = None,
         seasonal_forecast: SeasonalForecast | None = None,
         user_context: UserContext | None = None,
+        skip_greeting: bool = False,
     ) -> str:
         """Generate template-based response as fallback."""
         city = intent.city
 
-        # Get personalized greeting
+        # Get personalized greeting (conditionally for follow-up queries)
         user_name = user_context.user_name if user_context else None
-        greeting = get_personalized_greeting(user_name)
+        if skip_greeting:
+            greeting = ""
+        else:
+            greeting = get_personalized_greeting(user_name) + "\n\n"
 
         # Determine if this is an agro query (for tip selection)
         is_agro_query = intent.query_type in (
@@ -1406,7 +1412,7 @@ class GroqProvider:
 
         if intent.query_type == QueryType.GREETING:
             return (
-                f"{greeting}\n\n"
+                f"{greeting}"
                 "I'm your weather assistant. I can help with:\n"
                 "☀️ Weather  📅 Forecasts  🌱 Farming advice\n\n"
                 "What would you like to know?"
@@ -1414,7 +1420,7 @@ class GroqProvider:
 
         if intent.query_type == QueryType.HELP:
             return (
-                f"{greeting}\n\n"
+                f"{greeting}"
                 "ℹ️ *How to use:*\n"
                 '☀️ "weather in Kumasi"\n'
                 '📅 "forecast for tomorrow"\n'
@@ -1425,16 +1431,16 @@ class GroqProvider:
 
         # Route to query-specific seasonal responses FIRST
         if intent.query_type == QueryType.SEASONAL_ONSET and seasonal_forecast:
-            return f"{greeting}\n\n" + self._format_onset_response(seasonal_forecast)
+            return f"{greeting}" + self._format_onset_response(seasonal_forecast)
 
         if intent.query_type == QueryType.SEASONAL_CESSATION and seasonal_forecast:
-            return f"{greeting}\n\n" + self._format_cessation_response(seasonal_forecast)
+            return f"{greeting}" + self._format_cessation_response(seasonal_forecast)
 
         if intent.query_type == QueryType.DRY_SPELL and seasonal_forecast:
-            return f"{greeting}\n\n" + self._format_dry_spell_response(seasonal_forecast)
+            return f"{greeting}" + self._format_dry_spell_response(seasonal_forecast)
 
         if intent.query_type == QueryType.SEASON_LENGTH and seasonal_forecast:
-            return f"{greeting}\n\n" + self._format_season_length_response(seasonal_forecast)
+            return f"{greeting}" + self._format_season_length_response(seasonal_forecast)
 
         if weather_data:
             # Get condition emoji and display name
@@ -1457,7 +1463,7 @@ class GroqProvider:
                 )
 
             return (
-                f"{greeting}\n\n"
+                f"{greeting}"
                 f"{condition_emoji} *{condition_name}* in {weather_data.city}\n"
                 f"{weather_data.temperature:.0f}°C (feels like {weather_data.feels_like:.0f}°C)\n"
                 f"💧 Humidity: {weather_data.humidity}%\n"
@@ -1466,7 +1472,7 @@ class GroqProvider:
             )
 
         if forecast_data and forecast_data.periods:
-            lines = [f"{greeting}\n\n📅 *Forecast* for {forecast_data.city}\n"]
+            lines = [f"{greeting}📅 *Forecast* for {forecast_data.city}\n"]
             for period in forecast_data.periods[:5]:
                 condition_emoji, _ = get_condition_display(period.description)
                 lines.append(
@@ -1485,7 +1491,7 @@ class GroqProvider:
 
         if agromet_data and agromet_data.daily_data:
             today = agromet_data.daily_data[0]
-            msg = f"{greeting}\n\n🌱 *Agro Data* - {today.date}\n\n"
+            msg = f"{greeting}🌱 *Agro Data* - {today.date}\n\n"
             if today.eto is not None:
                 msg += f"💧 ETO: {today.eto:.2f}mm\n"
             if today.temp_max is not None:
@@ -1497,7 +1503,7 @@ class GroqProvider:
             return msg
 
         if gdd_data:
-            msg = f"{greeting}\n\n📈 *{gdd_data.crop.title()} GDD*\n\n"
+            msg = f"{greeting}📈 *{gdd_data.crop.title()} GDD*\n\n"
             msg += f"Accumulated: {gdd_data.accumulated_gdd:.0f}\n"
             msg += f"Stage: {gdd_data.current_stage}\n"
             if gdd_data.next_stage:
@@ -1506,7 +1512,7 @@ class GroqProvider:
 
         if seasonal_data:
             return (
-                f"{greeting}\n\n"
+                f"{greeting}"
                 "🗓️ *Seasonal Outlook*\n\n"
                 f"🌡️ Temp: {seasonal_data.temperature_trend}\n"
                 f"🌧️ Rain: {seasonal_data.precipitation_trend}\n\n"
@@ -1521,7 +1527,7 @@ class GroqProvider:
                 "single": "Single Season",
             }.get(seasonal_forecast.season_type.value, seasonal_forecast.season_type.value)
 
-            msg = f"{greeting}\n\n🌍 *{region_name} Ghana* - {season_name}\n\n"
+            msg = f"{greeting}🌍 *{region_name} Ghana* - {season_name}\n\n"
 
             if seasonal_forecast.onset_date:
                 onset_emoji = "✅" if seasonal_forecast.onset_status == "occurred" else "📅"
@@ -1543,7 +1549,7 @@ class GroqProvider:
             return msg
 
         return (
-            f"{greeting}\n\n"
+            f"{greeting}"
             "I couldn't find that info. "
             "Try asking about weather, forecasts, or farming advice!"
         )

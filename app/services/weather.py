@@ -33,15 +33,28 @@ async def get_weather(city: str | None = None) -> WeatherResponse:
     """
     Fetch weather data for a given city.
 
+    Note: This function is deprecated. Prefer get_weather_by_coordinates()
+    for location-specific accuracy. This function is kept for backward
+    compatibility with city name lookups.
+
     Args:
-        city: City name to get weather for. Defaults to Accra, Ghana.
+        city: City name to get weather for. Required.
               Supports "City, Country" format (e.g., "Kade, Ghana" or "Kade, GH").
 
     Returns:
         WeatherResponse with weather data or error message.
     """
+    if not city:
+        return WeatherResponse(
+            success=False,
+            error_message=(
+                "I need a location to provide weather. "
+                "Please share your location or specify a place name."
+            ),
+        )
+
     settings = get_settings()
-    location = city if city else settings.default_location
+    location = city
     cache_key = f"city:{location.lower()}"
 
     if cache_key in weather_cache:
@@ -172,20 +185,31 @@ async def get_weather_by_coordinates(
 
 async def get_weather_for_location(location: LocationInput) -> WeatherResponse:
     """
-    Fetch weather data for a LocationInput (coordinates or city).
+    Fetch weather data for a LocationInput.
+
+    IMPORTANT: This function now requires coordinates. City-name-only lookups
+    are no longer supported to ensure location-specific accuracy.
 
     Args:
-        location: LocationInput with either coordinates or city name.
+        location: LocationInput with coordinates (required).
 
     Returns:
         WeatherResponse with weather data or error message.
     """
-    if location.has_coordinates:
-        return await get_weather_by_coordinates(
-            location.latitude,
-            location.longitude,
+    if not location.has_coordinates:
+        return WeatherResponse(
+            success=False,
+            error_message=(
+                "I need your location to provide accurate weather. "
+                "Please share your location using WhatsApp's location button "
+                "(tap the paperclip icon and select Location), "
+                "or tell me a specific place name."
+            ),
         )
-    return await get_weather(location.city)
+    return await get_weather_by_coordinates(
+        location.latitude,
+        location.longitude,
+    )
 
 
 def parse_weather_response(data: dict) -> WeatherData:
