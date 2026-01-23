@@ -7,7 +7,7 @@ from typing import Protocol
 from cachetools import TTLCache
 
 from app.config import get_settings
-from app.models.ai_schemas import ConversationTurn, UserContext
+from app.models.ai_schemas import ConversationTurn, PendingClarification, UserContext
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,42 @@ class MemoryStore(Protocol):
 
     def add_assistant_message(self, user_id: str, message: str) -> UserContext:
         """Add an assistant message to conversation history."""
+        ...
+
+    def set_home_location(
+        self,
+        user_id: str,
+        latitude: float,
+        longitude: float,
+        location_name: str | None = None,
+    ) -> UserContext:
+        """Store permanent home location from WhatsApp location share."""
+        ...
+
+    def get_home_location(
+        self,
+        user_id: str,
+    ) -> tuple[float, float, str | None] | None:
+        """Retrieve stored home location (lat, lon, name) or None."""
+        ...
+
+    def set_pending_clarification(
+        self,
+        user_id: str,
+        clarification: PendingClarification,
+    ) -> UserContext:
+        """Set pending location clarification state."""
+        ...
+
+    def get_pending_clarification(
+        self,
+        user_id: str,
+    ) -> PendingClarification | None:
+        """Get pending location clarification state."""
+        ...
+
+    def clear_pending_clarification(self, user_id: str) -> UserContext:
+        """Clear pending location clarification state."""
         ...
 
 
@@ -199,6 +235,116 @@ class InMemoryStore:
             Updated UserContext.
         """
         return self.update_context(user_id, message=message, role="assistant")
+
+    def set_home_location(
+        self,
+        user_id: str,
+        latitude: float,
+        longitude: float,
+        location_name: str | None = None,
+    ) -> UserContext:
+        """
+        Store permanent home location from WhatsApp location share.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+            latitude: GPS latitude coordinate.
+            longitude: GPS longitude coordinate.
+            location_name: Human-readable location name (optional).
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.home_latitude = latitude
+        context.home_longitude = longitude
+        context.home_location_name = location_name
+        # Also update last_latitude/longitude for backward compatibility
+        context.last_latitude = latitude
+        context.last_longitude = longitude
+        self.save_context(context)
+        return context
+
+    def get_home_location(
+        self,
+        user_id: str,
+    ) -> tuple[float, float, str | None] | None:
+        """
+        Retrieve stored home location.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            Tuple of (latitude, longitude, location_name) or None if not set.
+        """
+        context = self.get_context(user_id)
+        if context and context.has_home_location:
+            return (
+                context.home_latitude,
+                context.home_longitude,
+                context.home_location_name,
+            )
+        return None
+
+    def set_pending_clarification(
+        self,
+        user_id: str,
+        clarification: PendingClarification,
+    ) -> UserContext:
+        """
+        Set pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+            clarification: PendingClarification object.
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.pending_clarification = clarification
+        self.save_context(context)
+        return context
+
+    def get_pending_clarification(
+        self,
+        user_id: str,
+    ) -> PendingClarification | None:
+        """
+        Get pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            PendingClarification if exists and not expired, None otherwise.
+        """
+        context = self.get_context(user_id)
+        if context and context.pending_clarification:
+            # Check if expired
+            if datetime.now() > context.pending_clarification.expires_at:
+                # Clear expired clarification
+                context.pending_clarification = None
+                self.save_context(context)
+                return None
+            return context.pending_clarification
+        return None
+
+    def clear_pending_clarification(self, user_id: str) -> UserContext:
+        """
+        Clear pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.pending_clarification = None
+        self.save_context(context)
+        return context
 
 
 class RedisMemoryStore:
@@ -411,6 +557,116 @@ class RedisMemoryStore:
             Updated UserContext.
         """
         return self.update_context(user_id, message=message, role="assistant")
+
+    def set_home_location(
+        self,
+        user_id: str,
+        latitude: float,
+        longitude: float,
+        location_name: str | None = None,
+    ) -> UserContext:
+        """
+        Store permanent home location from WhatsApp location share.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+            latitude: GPS latitude coordinate.
+            longitude: GPS longitude coordinate.
+            location_name: Human-readable location name (optional).
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.home_latitude = latitude
+        context.home_longitude = longitude
+        context.home_location_name = location_name
+        # Also update last_latitude/longitude for backward compatibility
+        context.last_latitude = latitude
+        context.last_longitude = longitude
+        self.save_context(context)
+        return context
+
+    def get_home_location(
+        self,
+        user_id: str,
+    ) -> tuple[float, float, str | None] | None:
+        """
+        Retrieve stored home location.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            Tuple of (latitude, longitude, location_name) or None if not set.
+        """
+        context = self.get_context(user_id)
+        if context and context.has_home_location:
+            return (
+                context.home_latitude,
+                context.home_longitude,
+                context.home_location_name,
+            )
+        return None
+
+    def set_pending_clarification(
+        self,
+        user_id: str,
+        clarification: PendingClarification,
+    ) -> UserContext:
+        """
+        Set pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+            clarification: PendingClarification object.
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.pending_clarification = clarification
+        self.save_context(context)
+        return context
+
+    def get_pending_clarification(
+        self,
+        user_id: str,
+    ) -> PendingClarification | None:
+        """
+        Get pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            PendingClarification if exists and not expired, None otherwise.
+        """
+        context = self.get_context(user_id)
+        if context and context.pending_clarification:
+            # Check if expired
+            if datetime.now() > context.pending_clarification.expires_at:
+                # Clear expired clarification
+                context.pending_clarification = None
+                self.save_context(context)
+                return None
+            return context.pending_clarification
+        return None
+
+    def clear_pending_clarification(self, user_id: str) -> UserContext:
+        """
+        Clear pending location clarification state.
+
+        Args:
+            user_id: User's WhatsApp number or ID.
+
+        Returns:
+            Updated UserContext.
+        """
+        context = self.get_or_create_context(user_id)
+        context.pending_clarification = None
+        self.save_context(context)
+        return context
 
 
 # Singleton instance

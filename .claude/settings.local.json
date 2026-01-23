@@ -14,7 +14,8 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(taskkill //F //PID 20388)",
-      "Bash(taskkill //F //PID 18912)"
+      "Bash(taskkill //F //PID 18912)",
+      "Bash(git push:*)"
     ]
   }
 }

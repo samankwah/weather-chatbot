@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",  # Ignore extra environment variables
     )
 
     # Twilio Configuration
@@ -45,11 +46,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     use_redis: bool = False
 
-    # Application Settings
-    default_city: str = "Accra"
-    default_country: str = "Ghana"
-    default_latitude: float = 5.6037
-    default_longitude: float = -0.1870
+    # Geocoding Configuration (OpenStreetMap Nominatim - free, no API key)
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    nominatim_user_agent: str = "weather-chatbot/1.0"
+    geocoding_cache_ttl: int = 86400  # 24 hours
+    geocoding_confidence_threshold: float = 0.7
+    default_country_bias: str = "Ghana"
 
     # Typing Delay Settings (for natural UX)
     typing_delay_enabled: bool = True
@@ -66,11 +68,6 @@ class Settings(BaseSettings):
         if not number.startswith("whatsapp:"):
             return f"whatsapp:{number}"
         return number
-
-    @property
-    def default_location(self) -> str:
-        """Return the default location string."""
-        return f"{self.default_city},{self.default_country}"
 
 
 @lru_cache

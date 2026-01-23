@@ -1,6 +1,7 @@
 """Twilio webhook endpoint for WhatsApp messages."""
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from slowapi import Limiter
@@ -30,8 +31,6 @@ from app.services.agromet import (
 from app.services.forecast import get_extended_forecast, get_forecast
 from app.services.interactive import (
     convert_button_to_message,
-    format_buttons_as_text,
-    get_contextual_buttons,
     parse_button_payload,
 )
 from app.services.localization import get_localized_greeting
@@ -40,6 +39,12 @@ from app.services.messaging import (
     get_complexity_for_query,
     get_messaging_provider,
     simulate_typing_delay,
+)
+from app.services.location import (
+    create_pending_clarification,
+    get_location_prompt_message,
+    handle_clarification_response,
+    resolve_location,
 )
 from app.services.normalizer import (
     extract_normalized_entities,
@@ -167,6 +172,32 @@ async def twilio_webhook(
     )
 
 
+def is_follow_up_query(user_context: UserContext) -> bool:
+    """
+    Check if this is a follow-up query within the conversation session.
+
+    A query is considered a follow-up if:
+    1. There's a previous interaction within the last 5 minutes
+    2. There's at least one previous exchange in conversation history
+
+    Args:
+        user_context: User's conversation context.
+
+    Returns:
+        True if this is a follow-up query, False otherwise.
+    """
+    if not user_context.last_interaction:
+        return False
+
+    # Check if last interaction was within 5 minutes
+    time_since_last = datetime.now() - user_context.last_interaction
+    if time_since_last.total_seconds() > 300:  # 5 minutes
+        return False
+
+    # Check if there's conversation history (at least one exchange)
+    return len(user_context.conversation_history) >= 2
+
+
 async def process_message(
     message: str,
     user_id: str,
@@ -187,26 +218,62 @@ async def process_message(
     Returns:
         Tuple of (response_message, query_type).
     """
-    settings = get_settings()
     memory_store = get_memory_store()
     ai_provider = get_ai_provider()
 
     # Get or create user context
     user_context = memory_store.get_or_create_context(user_id)
 
+    # Detect if this is a follow-up query (for omitting greeting)
+    skip_greeting = is_follow_up_query(user_context)
+
     # Update context with profile name if available
     if profile_name and (not user_context.user_name or user_context.user_name != profile_name):
         memory_store.update_context(user_id, user_name=profile_name)
         user_context = memory_store.get_context(user_id)
 
-    # Update context with location if shared
+    # Handle WhatsApp location share - store as home location
     if latitude is not None and longitude is not None:
-        memory_store.update_context(
-            user_id,
-            latitude=latitude,
-            longitude=longitude,
-        )
+        from app.services.geocoding import reverse_geocode
+        location_name = await reverse_geocode(latitude, longitude)
+        memory_store.set_home_location(user_id, latitude, longitude, location_name)
         user_context = memory_store.get_context(user_id)
+        logger.info(f"Saved home location for {user_id}: {location_name} ({latitude}, {longitude})")
+
+    # Check for pending clarification response (user selecting option 1, 2, 3)
+    pending_clarification = memory_store.get_pending_clarification(user_id)
+    if pending_clarification:
+        resolved_location = handle_clarification_response(message, pending_clarification)
+        if resolved_location:
+            # User selected a valid option - clear clarification and proceed
+            memory_store.clear_pending_clarification(user_id)
+            # Fetch weather for the selected location
+            weather_response = await get_weather_by_coordinates(
+                resolved_location.latitude,
+                resolved_location.longitude,
+            )
+            if weather_response.success and weather_response.data:
+                memory_store.add_user_message(user_id, message)
+                # Generate AI response for the weather data
+                clarification_intent = IntentExtraction(
+                    query_type=QueryType.WEATHER,
+                    city=resolved_location.city,
+                )
+                response = await ai_provider.generate_response(
+                    intent=clarification_intent,
+                    weather_data=weather_response.data,
+                    user_context=user_context,
+                )
+                memory_store.add_assistant_message(user_id, response)
+                if resolved_location.city:
+                    memory_store.update_context(user_id, city=resolved_location.city)
+                return response, QueryType.WEATHER.value
+            else:
+                return (
+                    f"I found {resolved_location.city}, but couldn't get the weather. "
+                    "Please try again.",
+                    "weather",
+                )
 
     # Add user message to conversation history
     memory_store.add_user_message(user_id, message)
@@ -244,23 +311,58 @@ async def process_message(
     if not intent.crop and entities.get("crop"):
         intent.crop = entities["crop"]
 
-    # Additional fuzzy matching for city if AI extracted something unrecognized
+    # Only apply fuzzy matching for known corrections (typos, abbreviations)
+    # Skip similarity-based matching - let geocoding handle unknown cities
+    # This prevents incorrect matches like "Goaso" -> "Bogoso"
     if intent.city:
-        fuzzy_city = fuzzy_match_city(intent.city)
-        if fuzzy_city:
-            intent.city = fuzzy_city
+        from app.services.normalizer import CITY_CORRECTIONS, GHANA_CITIES
+        input_lower = intent.city.lower().strip()
+        # Only correct if it's a known typo/correction or exact match
+        if input_lower in CITY_CORRECTIONS:
+            intent.city = CITY_CORRECTIONS[input_lower].title()
+        elif input_lower in GHANA_CITIES:
+            intent.city = input_lower.title()
 
-    # Resolve location - use shared coords, then intent city, then user context, then defaults
-    final_lat = latitude
-    final_lon = longitude
+    # --- LOCATION RESOLUTION ---
+    # Resolve location using geocoding with priority:
+    # 1. GPS coordinates from WhatsApp location share
+    # 2. Geocoded city name from user's message
+    # 3. Stored home location from context
+    # 4. Prompt user to share location
+    location_result = await resolve_location(
+        intent_city=intent.city,
+        latitude=latitude,
+        longitude=longitude,
+        user_context=user_context,
+    )
 
-    if final_lat is None or final_lon is None:
-        if user_context and user_context.last_latitude and user_context.last_longitude:
-            final_lat = user_context.last_latitude
-            final_lon = user_context.last_longitude
-        else:
-            final_lat = settings.default_latitude
-            final_lon = settings.default_longitude
+    # Handle location prompt (new user with no location)
+    if location_result.needs_location_prompt:
+        response = location_result.clarification_message or get_location_prompt_message()
+        memory_store.add_assistant_message(user_id, response)
+        return response, "location_prompt"
+
+    # Handle location clarification (ambiguous place name)
+    if location_result.needs_clarification:
+        # Store pending clarification state
+        if location_result.clarification_options:
+            pending = create_pending_clarification(
+                intent.city or "unknown",
+                location_result.clarification_options,
+            )
+            memory_store.set_pending_clarification(user_id, pending)
+        response = location_result.clarification_message or "Please select a location."
+        memory_store.add_assistant_message(user_id, response)
+        return response, "location_clarification"
+
+    # Use resolved location coordinates
+    final_lat = location_result.location.latitude if location_result.location else None
+    final_lon = location_result.location.longitude if location_result.location else None
+    resolved_city = location_result.location.city if location_result.location else None
+
+    # Update intent city with resolved name if we geocoded it
+    if resolved_city and not intent.city:
+        intent.city = resolved_city
 
     # Route based on query type and fetch data
     weather_data: WeatherData | None = None
@@ -278,8 +380,11 @@ async def process_message(
             pass  # No data needed for help
 
         elif intent.query_type == QueryType.WEATHER:
-            weather_data = await _get_weather_data(intent, latitude, longitude)
+            weather_data = await _get_weather_data(intent, final_lat, final_lon)
             if weather_data:
+                # Use the user's requested/geocoded city name, not the API's nearest city
+                if resolved_city:
+                    weather_data.city = resolved_city
                 memory_store.update_context(user_id, city=weather_data.city)
 
         elif intent.query_type == QueryType.FORECAST:
@@ -319,7 +424,9 @@ async def process_message(
 
         elif intent.query_type == QueryType.CROP_ADVICE:
             # Get comprehensive data for crop advice
-            weather_data = await _get_weather_data(intent, latitude, longitude)
+            weather_data = await _get_weather_data(intent, final_lat, final_lon)
+            if weather_data and resolved_city:
+                weather_data.city = resolved_city
             agromet_response = await get_agromet_data(final_lat, final_lon, 7)
             if agromet_response.success and agromet_response.data:
                 agromet_data = agromet_response.data
@@ -348,6 +455,7 @@ async def process_message(
         seasonal_data=seasonal_data,
         seasonal_forecast=seasonal_forecast_data,
         user_context=user_context,
+        skip_greeting=skip_greeting,
     )
 
     # Add response to conversation history
@@ -357,17 +465,6 @@ async def process_message(
     if intent.city:
         memory_store.update_context(user_id, city=intent.city)
 
-    # Get contextual quick reply buttons
-    weather_condition = weather_data.description if weather_data else None
-    button_prompt, buttons = get_contextual_buttons(
-        intent.query_type.value, weather_condition
-    )
-
-    # Append button hints to response (for text-based button fallback)
-    button_hints = format_buttons_as_text(buttons)
-    if button_hints and intent.query_type not in (QueryType.HELP,):
-        response = f"{response}\n\n{button_prompt}\n{button_hints}"
-
     return response, intent.query_type.value
 
 
@@ -376,24 +473,26 @@ async def _get_weather_data(
     latitude: float | None,
     longitude: float | None,
 ) -> WeatherData | None:
-    """Get current weather data based on intent and location."""
-    settings = get_settings()
+    """
+    Get current weather data based on resolved coordinates.
 
-    # Try coordinates first
+    Note: This function now prioritizes coordinates over city names
+    to ensure location-specific accuracy.
+    """
+    # Use resolved coordinates (required for accurate weather)
     if latitude is not None and longitude is not None:
         response = await get_weather_by_coordinates(latitude, longitude)
         if response.success and response.data:
             return response.data
 
-    # Try city from intent
+    # Fallback to city name lookup (less accurate but better than nothing)
     if intent.city:
         response = await get_weather(intent.city)
         if response.success and response.data:
             return response.data
 
-    # Fall back to default
-    response = await get_weather(settings.default_location)
-    return response.data if response.success else None
+    # No location available
+    return None
 
 
 async def _get_forecast_data(

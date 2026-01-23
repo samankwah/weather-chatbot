@@ -29,27 +29,40 @@ async def get_forecast(
     """
     Get 5-day forecast from OpenWeatherMap.
 
+    Prefers coordinates for accurate location-specific forecasts.
+    Falls back to city name if coordinates not available.
+
     Args:
-        city: City name (optional if coordinates provided).
-        latitude: Latitude coordinate.
-        longitude: Longitude coordinate.
+        city: City name (fallback if coordinates not provided).
+        latitude: Latitude coordinate (preferred).
+        longitude: Longitude coordinate (preferred).
 
     Returns:
         ForecastResponse with forecast data or error.
     """
     settings = get_settings()
 
+    # Require either coordinates or city name
+    if latitude is None or longitude is None:
+        if not city:
+            return ForecastResponse(
+                success=False,
+                error_message=(
+                    "I need your location to provide a forecast. "
+                    "Please share your location or specify a place name."
+                ),
+            )
+
     # Build cache key
     if latitude is not None and longitude is not None:
         cache_key = f"forecast:coords:{latitude:.4f},{longitude:.4f}"
     else:
-        location = city if city else settings.default_location
-        cache_key = f"forecast:city:{location.lower()}"
+        cache_key = f"forecast:city:{city.lower()}"
 
     if cache_key in forecast_cache:
         return forecast_cache[cache_key]
 
-    # Build request params
+    # Build request params - prefer coordinates
     params = {
         "appid": settings.weather_api_key,
         "units": "metric",
@@ -59,8 +72,7 @@ async def get_forecast(
         params["lat"] = latitude
         params["lon"] = longitude
     else:
-        location = city if city else settings.default_location
-        params["q"] = location
+        params["q"] = city
 
     try:
         client = await get_http_client()

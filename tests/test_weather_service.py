@@ -192,24 +192,12 @@ class TestGetWeather:
         assert "couldn't connect" in result.error_message.lower()
 
     @pytest.mark.asyncio
-    @patch("app.services.weather.get_http_client")
-    async def test_get_weather_uses_default_location(
-        self,
-        mock_get_client: MagicMock,
-        sample_weather_api_response: dict,
-    ) -> None:
-        """Should use default location when city is None."""
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = sample_weather_api_response
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_get_client.return_value = mock_client
-
+    async def test_get_weather_requires_location(self) -> None:
+        """Should return error when city is None (no default fallback)."""
         result = await get_weather(None)
 
-        assert result.success is True
-        mock_client.get.assert_called_once()
+        assert result.success is False
+        assert "need a location" in result.error_message.lower()
 
 
 class TestGetWeatherByCoordinates:

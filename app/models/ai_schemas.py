@@ -83,6 +83,14 @@ class ConversationTurn(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
+class PendingClarification(BaseModel):
+    """Model for pending location clarification state."""
+
+    original_query: str
+    options: list[dict] = Field(default_factory=list)  # List of {place_name, lat, lon, display_name}
+    expires_at: datetime
+
+
 class UserContext(BaseModel):
     """Model for user context/memory storage."""
 
@@ -96,6 +104,19 @@ class UserContext(BaseModel):
     last_query_type: Optional[str] = None  # Track last query for contextual buttons
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
     last_interaction: datetime = Field(default_factory=datetime.now)
+
+    # Home location - permanent storage from WhatsApp location share
+    home_latitude: Optional[float] = None
+    home_longitude: Optional[float] = None
+    home_location_name: Optional[str] = None
+
+    # Pending clarification state for ambiguous locations
+    pending_clarification: Optional[PendingClarification] = None
+
+    @property
+    def has_home_location(self) -> bool:
+        """Check if user has a saved home location."""
+        return self.home_latitude is not None and self.home_longitude is not None
 
 
 class ForecastPeriod(BaseModel):
