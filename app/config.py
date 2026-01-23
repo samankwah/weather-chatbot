@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     twilio_content_sid_location: str | None = None
 
     # Weather API Configuration
-    weather_api_key: str
+    weather_api_key: str = ""
     weather_api_url: str = "https://api.openweathermap.org/data/2.5/weather"
     weather_forecast_url: str = "https://api.openweathermap.org/data/2.5/forecast"
 
