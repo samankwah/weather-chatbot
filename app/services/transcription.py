@@ -70,6 +70,11 @@ class GroqWhisperProvider:
         """
         Download audio file from URL.
 
+        Twilio media URLs return a 307 redirect to the actual file location.
+        We need to:
+        1. First request with auth to get the redirect URL
+        2. Follow the redirect WITHOUT auth (redirect goes to S3/CDN)
+
         Args:
             audio_url: URL to download audio from.
             auth: Optional (username, password) tuple for basic auth.
@@ -78,12 +83,26 @@ class GroqWhisperProvider:
             Tuple of (audio_bytes, content_type) or (None, None) if download failed.
         """
         try:
-            logger.info(f"Downloading audio from: {audio_url[:50]}...")
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            logger.info(f"Downloading audio from: {audio_url}")
+
+            # Don't auto-follow redirects - we need to handle auth differently
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+                # First request with auth
                 if auth:
                     response = await client.get(audio_url, auth=auth)
                 else:
                     response = await client.get(audio_url)
+
+                logger.info(f"Initial response: HTTP {response.status_code}")
+
+                # Handle redirect (307 or 302)
+                if response.status_code in (301, 302, 303, 307, 308):
+                    redirect_url = response.headers.get("location")
+                    if redirect_url:
+                        logger.info(f"Following redirect to: {redirect_url[:80]}...")
+                        # Follow redirect WITHOUT auth (it's a signed S3/CDN URL)
+                        response = await client.get(redirect_url)
+                        logger.info(f"Redirect response: HTTP {response.status_code}")
 
                 if response.status_code == 200:
                     content_type = response.headers.get("content-type", "audio/ogg")
