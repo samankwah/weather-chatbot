@@ -18,7 +18,10 @@
       "Bash(git push:*)",
       "Bash(git add:*)",
       "Bash(pip show:*)",
-      "Bash(pip index:*)"
+      "Bash(pip index:*)",
+      "Bash(dir /b \"C:\\\\Users\\\\CRAFT\\\\Desktop\\\\future MEST projects\\\\Backend\\\\weather-chatbot\\\\.env*\")",
+      "Bash(dir \"C:\\\\Users\\\\CRAFT\\\\Desktop\\\\future MEST projects\\\\Backend\\\\weather-chatbot\"\" 2>nul | findstr \".env \")",
+      "Bash(xxd:*)"
     ]
   }
 }

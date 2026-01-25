@@ -143,6 +143,9 @@ class GroqWhisperProvider:
             )
 
         try:
+            # Parse content type (handle "audio/ogg; codecs=opus" format)
+            base_content_type = content_type.split(";")[0].strip() if content_type else "audio/ogg"
+
             # Determine file extension from content type
             extension_map = {
                 "audio/ogg": ".ogg",
@@ -152,16 +155,18 @@ class GroqWhisperProvider:
                 "audio/wav": ".wav",
                 "audio/webm": ".webm",
                 "audio/x-m4a": ".m4a",
+                "audio/aac": ".aac",
             }
-            ext = extension_map.get(content_type, ".ogg")
+            ext = extension_map.get(base_content_type, ".ogg")
             filename = f"voice_message{ext}"
 
             # Create a file-like object for the Groq API
             # The API expects a tuple of (filename, file_content, content_type)
-            audio_file = (filename, audio_data, content_type or "audio/ogg")
+            # Use the base content type without codec info
+            audio_file = (filename, audio_data, base_content_type)
 
             # Log audio size for debugging
-            logger.info(f"Audio file size: {len(audio_data)} bytes, type: {content_type}")
+            logger.info(f"Audio file size: {len(audio_data)} bytes, type: {base_content_type} (original: {content_type})")
 
             # Call Groq Whisper API
             # Build kwargs dynamically to avoid passing None values
