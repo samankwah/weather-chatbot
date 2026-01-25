@@ -53,6 +53,7 @@ from app.services.normalizer import (
     parse_complex_query,
 )
 from app.services.seasonal import get_seasonal_forecast
+from app.services.transcription import get_transcription_provider
 from app.services.weather import get_weather, get_weather_by_coordinates
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,8 @@ async def twilio_webhook(
     Latitude: str | None = Form(default=None),
     Longitude: str | None = Form(default=None),
     ButtonPayload: str | None = Form(default=None),
+    MediaUrl0: str | None = Form(default=None),
+    MediaContentType0: str | None = Form(default=None),
     x_twilio_signature: str | None = Header(default=None),
 ) -> WebhookResponse:
     """
@@ -127,6 +130,8 @@ async def twilio_webhook(
         Latitude: GPS latitude (when user shares location).
         Longitude: GPS longitude (when user shares location).
         ButtonPayload: Payload from interactive button clicks.
+        MediaUrl0: URL of the first media attachment.
+        MediaContentType0: Content type of the first media attachment.
         x_twilio_signature: Twilio request signature.
 
     Returns:
@@ -134,6 +139,8 @@ async def twilio_webhook(
     """
     # TODO: Re-enable for production
     # await validate_twilio_request(request, x_twilio_signature)
+
+    settings = get_settings()
 
     # Parse coordinates if shared
     lat: float | None = None
@@ -145,8 +152,58 @@ async def twilio_webhook(
         except ValueError:
             pass
 
-    # Handle button payload - convert to natural language message
+    # Handle voice message transcription
     message_to_process = Body
+    if NumMedia > 0 and MediaUrl0 and MediaContentType0:
+        # Check if it's an audio message (voice note)
+        if MediaContentType0.startswith("audio/"):
+            logger.info(f"Received voice message from {From}: {MediaContentType0}")
+            transcription_provider = get_transcription_provider()
+
+            # Twilio media URLs require authentication
+            twilio_auth = (settings.twilio_account_sid, settings.twilio_auth_token)
+
+            result = await transcription_provider.transcribe_audio(
+                audio_url=MediaUrl0,
+                auth=twilio_auth,
+            )
+
+            if result.success and result.text:
+                message_to_process = result.text
+                logger.info(f"Voice transcription: '{result.text[:100]}...'")
+            else:
+                # Transcription failed - send helpful error message
+                messaging_provider = get_messaging_provider()
+                error_response = (
+                    "🎤 I received your voice message but couldn't transcribe it. "
+                    "Please try again or send a text message instead.\n\n"
+                    "You can ask things like:\n"
+                    "• What's the weather in Accra?\n"
+                    "• Will it rain tomorrow?\n"
+                    "• Weather forecast for Kumasi"
+                )
+                messaging_provider.send_message(From, error_response)
+                return WebhookResponse(
+                    success=False,
+                    message=f"Transcription failed: {result.error}",
+                )
+        else:
+            # Non-audio media (image, video, etc.)
+            logger.info(f"Received non-audio media from {From}: {MediaContentType0}")
+            # If there's text with the media, use that
+            if not Body:
+                messaging_provider = get_messaging_provider()
+                messaging_provider.send_message(
+                    From,
+                    "I can only process voice messages and text. "
+                    "Please send me a text or voice message about the weather!",
+                )
+                return WebhookResponse(
+                    success=True,
+                    message="Non-audio media received",
+                )
+
+    # Handle button payload - convert to natural language message
     if ButtonPayload:
         # Get user's last city for context
         memory_store = get_memory_store()

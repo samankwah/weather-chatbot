@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.1-8b-instant"
     groq_timeout: float = 10.0
 
+    # Groq Whisper ASR Configuration (voice-to-text)
+    groq_whisper_model: str = "whisper-large-v3"
+    groq_whisper_timeout: float = 30.0  # Voice transcription may take longer
+    voice_transcription_enabled: bool = True
+
     # Open-Meteo Configuration (FREE - no API key needed)
     open_meteo_base_url: str = "https://api.open-meteo.com/v1"
     open_meteo_forecast_days: int = 16
