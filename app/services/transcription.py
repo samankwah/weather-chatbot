@@ -1,5 +1,6 @@
 """Voice transcription service using Groq Whisper Large v3."""
 
+import io
 import logging
 from dataclasses import dataclass
 from typing import Protocol
@@ -65,7 +66,7 @@ class GroqWhisperProvider:
         self,
         audio_url: str,
         auth: tuple[str, str] | None = None,
-    ) -> bytes | None:
+    ) -> tuple[bytes | None, str | None]:
         """
         Download audio file from URL.
 
@@ -74,9 +75,10 @@ class GroqWhisperProvider:
             auth: Optional (username, password) tuple for basic auth.
 
         Returns:
-            Audio file bytes or None if download failed.
+            Tuple of (audio_bytes, content_type) or (None, None) if download failed.
         """
         try:
+            logger.info(f"Downloading audio from: {audio_url[:50]}...")
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if auth:
                     response = await client.get(audio_url, auth=auth)
@@ -84,18 +86,24 @@ class GroqWhisperProvider:
                     response = await client.get(audio_url)
 
                 if response.status_code == 200:
-                    return response.content
+                    content_type = response.headers.get("content-type", "audio/ogg")
+                    logger.info(
+                        f"Downloaded audio: {len(response.content)} bytes, "
+                        f"content-type: {content_type}"
+                    )
+                    return response.content, content_type
                 else:
                     logger.error(
-                        f"Failed to download audio: HTTP {response.status_code}"
+                        f"Failed to download audio: HTTP {response.status_code}, "
+                        f"body: {response.text[:200]}"
                     )
-                    return None
+                    return None, None
         except httpx.TimeoutException:
             logger.error(f"Timeout downloading audio from {audio_url}")
-            return None
+            return None, None
         except Exception as e:
-            logger.error(f"Error downloading audio: {e}")
-            return None
+            logger.error(f"Error downloading audio: {e}", exc_info=True)
+            return None, None
 
     async def transcribe_audio(
         self,
@@ -127,7 +135,7 @@ class GroqWhisperProvider:
             )
 
         # Download the audio file
-        audio_data = await self.download_audio(audio_url, auth=auth)
+        audio_data, content_type = await self.download_audio(audio_url, auth=auth)
         if not audio_data:
             return TranscriptionResult(
                 success=False,
@@ -135,26 +143,45 @@ class GroqWhisperProvider:
             )
 
         try:
-            # Create a file-like tuple for the Groq API
-            # Format: (filename, content, content_type)
-            audio_file = ("voice_message.ogg", audio_data, "audio/ogg")
+            # Parse content type (handle "audio/ogg; codecs=opus" format)
+            base_content_type = content_type.split(";")[0].strip() if content_type else "audio/ogg"
 
-            # Build transcription parameters
-            transcription_params = {
+            # Determine file extension from content type
+            extension_map = {
+                "audio/ogg": ".ogg",
+                "audio/opus": ".opus",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/wav": ".wav",
+                "audio/webm": ".webm",
+                "audio/x-m4a": ".m4a",
+                "audio/aac": ".aac",
+            }
+            ext = extension_map.get(base_content_type, ".ogg")
+            filename = f"voice_message{ext}"
+
+            # Create a file-like object for the Groq API
+            # The API expects a tuple of (filename, file_content, content_type)
+            # Use the base content type without codec info
+            audio_file = (filename, audio_data, base_content_type)
+
+            # Log audio size for debugging
+            logger.info(f"Audio file size: {len(audio_data)} bytes, type: {base_content_type} (original: {content_type})")
+
+            # Call Groq Whisper API
+            # Build kwargs dynamically to avoid passing None values
+            kwargs = {
                 "file": audio_file,
                 "model": self.model,
                 "response_format": "verbose_json",
             }
 
             # Add language hint if provided
-            # Whisper supports many languages including Twi (tw), Akan, English (en)
+            # Whisper supports many languages including Twi, Akan, English
             if language:
-                transcription_params["language"] = language
+                kwargs["language"] = language
 
-            # Call Groq Whisper API
-            transcription = await self.client.audio.transcriptions.create(
-                **transcription_params
-            )
+            transcription = await self.client.audio.transcriptions.create(**kwargs)
 
             # Extract results
             text = transcription.text.strip() if transcription.text else None
@@ -179,7 +206,7 @@ class GroqWhisperProvider:
                 )
 
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.error(f"Transcription error: {type(e).__name__}: {e}", exc_info=True)
             return TranscriptionResult(
                 success=False,
                 error=f"Transcription failed: {str(e)}",
