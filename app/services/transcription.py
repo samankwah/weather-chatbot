@@ -79,7 +79,7 @@ class GroqWhisperProvider:
         """
         try:
             logger.info(f"Downloading audio from: {audio_url[:50]}...")
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 if auth:
                     response = await client.get(audio_url, auth=auth)
                 else:
