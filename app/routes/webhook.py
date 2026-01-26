@@ -142,6 +142,9 @@ async def twilio_webhook(
 
     settings = get_settings()
 
+    # DEBUG: Log media parameters to diagnose voice message handling
+    logger.info(f"Webhook received - NumMedia: {NumMedia}, MediaUrl0: {MediaUrl0}, MediaContentType0: {MediaContentType0}")
+
     # Parse coordinates if shared
     lat: float | None = None
     lon: float | None = None
