@@ -68,16 +68,15 @@ class GroqWhisperProvider:
         auth: tuple[str, str] | None = None,
     ) -> tuple[bytes | None, str | None]:
         """
-        Download audio file from URL.
+        Download audio file from Twilio media URL.
 
-        Twilio media URLs return a 307 redirect to the actual file location.
-        We need to:
-        1. First request with auth to get the redirect URL
-        2. Follow the redirect WITHOUT auth (redirect goes to S3/CDN)
+        Twilio media URLs are public by default (no auth needed).
+        We try without auth first, with auth as fallback for users
+        who have enabled HTTP Basic Auth in their Twilio Console.
 
         Args:
             audio_url: URL to download audio from.
-            auth: Optional (username, password) tuple for basic auth.
+            auth: Optional (username, password) tuple for basic auth fallback.
 
         Returns:
             Tuple of (audio_bytes, content_type) or (None, None) if download failed.
@@ -85,43 +84,30 @@ class GroqWhisperProvider:
         try:
             logger.info(f"Downloading audio from: {audio_url}")
 
-            # Don't auto-follow redirects - we need to handle auth differently
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-                # First request with auth
-                if auth:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                # Try WITHOUT auth first (Twilio media is public by default)
+                response = await client.get(audio_url)
+                logger.info(f"Response: HTTP {response.status_code}")
+
+                # If unauthorized and we have auth, retry with auth
+                if response.status_code in (401, 403) and auth:
+                    logger.info("Unauthorized, retrying with auth...")
                     response = await client.get(audio_url, auth=auth)
-                else:
-                    response = await client.get(audio_url)
-
-                logger.info(f"Initial response: HTTP {response.status_code}")
-
-                # Handle redirect (307 or 302)
-                if response.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = response.headers.get("location")
-                    if redirect_url:
-                        logger.info(f"Following redirect to: {redirect_url[:80]}...")
-                        # Follow redirect WITHOUT auth (it's a signed S3/CDN URL)
-                        response = await client.get(redirect_url)
-                        logger.info(f"Redirect response: HTTP {response.status_code}")
+                    logger.info(f"With auth: HTTP {response.status_code}")
 
                 if response.status_code == 200:
                     content_type = response.headers.get("content-type", "audio/ogg")
-                    logger.info(
-                        f"Downloaded audio: {len(response.content)} bytes, "
-                        f"content-type: {content_type}"
-                    )
+                    logger.info(f"Downloaded: {len(response.content)} bytes, type: {content_type}")
                     return response.content, content_type
-                else:
-                    logger.error(
-                        f"Failed to download audio: HTTP {response.status_code}, "
-                        f"body: {response.text[:200]}"
-                    )
-                    return None, None
+
+                logger.error(f"Download failed: HTTP {response.status_code}, body: {response.text[:300]}")
+                return None, None
+
         except httpx.TimeoutException:
-            logger.error(f"Timeout downloading audio from {audio_url}")
+            logger.error(f"Timeout downloading audio")
             return None, None
         except Exception as e:
-            logger.error(f"Error downloading audio: {e}", exc_info=True)
+            logger.error(f"Download error: {e}", exc_info=True)
             return None, None
 
     async def transcribe_audio(
