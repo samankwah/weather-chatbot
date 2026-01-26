@@ -81,30 +81,32 @@ class GroqWhisperProvider:
         Returns:
             Tuple of (audio_bytes, content_type) or (None, None) if download failed.
         """
+        import requests  # Use requests for more reliable redirect handling
+
         try:
             logger.info(f"Downloading audio from: {audio_url}")
 
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                # Try WITHOUT auth first (Twilio media is public by default)
-                response = await client.get(audio_url)
-                logger.info(f"Response: HTTP {response.status_code}")
+            # Use requests library for more reliable Twilio redirect handling
+            # Try WITHOUT auth first (Twilio media is public by default)
+            response = requests.get(audio_url, timeout=30, allow_redirects=True)
+            logger.info(f"Response: HTTP {response.status_code}, Final URL: {response.url[:80]}...")
 
-                # If unauthorized and we have auth, retry with auth
-                if response.status_code in (401, 403) and auth:
-                    logger.info("Unauthorized, retrying with auth...")
-                    response = await client.get(audio_url, auth=auth)
-                    logger.info(f"With auth: HTTP {response.status_code}")
+            # If unauthorized and we have auth, retry with auth
+            if response.status_code in (401, 403) and auth:
+                logger.info("Unauthorized, retrying with auth...")
+                response = requests.get(audio_url, auth=auth, timeout=30, allow_redirects=True)
+                logger.info(f"With auth: HTTP {response.status_code}")
 
-                if response.status_code == 200:
-                    content_type = response.headers.get("content-type", "audio/ogg")
-                    logger.info(f"Downloaded: {len(response.content)} bytes, type: {content_type}")
-                    return response.content, content_type
+            if response.status_code == 200:
+                content_type = response.headers.get("content-type", "audio/ogg")
+                logger.info(f"Downloaded: {len(response.content)} bytes, type: {content_type}")
+                return response.content, content_type
 
-                logger.error(f"Download failed: HTTP {response.status_code}, body: {response.text[:300]}")
-                return None, None
+            logger.error(f"Download failed: HTTP {response.status_code}, body: {response.text[:300]}")
+            return None, None
 
-        except httpx.TimeoutException:
-            logger.error(f"Timeout downloading audio")
+        except requests.Timeout:
+            logger.error("Timeout downloading audio")
             return None, None
         except Exception as e:
             logger.error(f"Download error: {e}", exc_info=True)
