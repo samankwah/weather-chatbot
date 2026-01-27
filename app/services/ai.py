@@ -14,6 +14,7 @@ from app.models.ai_schemas import (
     ForecastData,
     GDDData,
     IntentExtraction,
+    MarineForecastData,
     QueryType,
     SeasonalForecast,
     SeasonalOutlook,
@@ -42,6 +43,7 @@ class AIProvider(Protocol):
         intent: IntentExtraction,
         weather_data: WeatherData | None = None,
         forecast_data: ForecastData | None = None,
+        marine_data: MarineForecastData | None = None,
         agromet_data: AgroMetData | None = None,
         gdd_data: GDDData | None = None,
         seasonal_data: SeasonalOutlook | None = None,
@@ -83,26 +85,30 @@ SECTION 3: QUERY TYPE DECISION TREE (Check in this priority order)
 2. HELP REQUEST → "help"
    Triggers: help, how do I, how to use, what can you do, instructions
 
-3. SEASONAL-SPECIFIC (check keywords carefully):
+3. MARINE & INLAND WATER:
+   - "marine", "sea", "ocean", "wave", "swell", "tide", "offshore", "coastal", "sea conditions", "fishing" -> "marine"
+   - "inland water", "lake", "river", "lagoon", "Lake Volta", "Akosombo", "Kpong" -> "inland_water"
+
+4. SEASONAL-SPECIFIC (check keywords carefully):
    - "onset", "start of rain", "when does rain begin" → "seasonal_onset"
    - "cessation", "end of rain", "when do rains stop" → "seasonal_cessation"
    - "dry spell", "drought risk", "dry period" → "dry_spell"
    - "season length", "how long is season", "duration" → "season_length"
    - "seasonal outlook", "3-month", "6-month forecast" → "seasonal"
 
-4. AGRO-METEOROLOGICAL:
+5. AGRO-METEOROLOGICAL:
    - "GDD", "degree days", "growth stage", "accumulation" → "gdd"
    - "soil moisture", "soil water", "soil condition" → "soil"
    - "ETO", "evapotranspiration", "water loss" → "eto"
    - "dekadal", "10-day bulletin", "bulletin" → "dekadal"
 
-5. CROP-RELATED → "crop_advice"
+6. CROP-RELATED → "crop_advice"
    Triggers: when to plant, planting advice, should I plant, crop recommendation
 
-6. FUTURE WEATHER → "forecast"
+7. FUTURE WEATHER → "forecast"
    Triggers: tomorrow, next week, this week, weekend, will it rain, future dates
 
-7. CURRENT WEATHER → "weather" (DEFAULT)
+8. CURRENT WEATHER → "weather" (DEFAULT)
    Triggers: weather now, current conditions, what's the weather, temperature today
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -133,6 +139,8 @@ TIME OF DAY (optional, include when mentioned):
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION 5: DISAMBIGUATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
+- Mentions sea/ocean/waves/tide/coast -> query_type: "marine"
+- Mentions lake/river/lagoon/Volta -> query_type: "inland_water"
 - Message mentions BOTH current AND future → use "forecast"
 - City unclear but crop mentioned → city: null (let system use default)
 - Time unclear for weather query → default to "now"
@@ -185,6 +193,13 @@ Output: {"city": "Kumasi", "query_type": "gdd", "crop": "maize", "time_reference
 Input: "Soil moisture for my rice field"
 Output: {"city": null, "query_type": "soil", "crop": "rice", "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.88}
 
+MARINE/INLAND QUERIES:
+Input: "marine forecast for Tema"
+Output: {"city": "Tema", "query_type": "marine", "crop": null, "time_reference": {"reference": "now", "days_ahead": 0}, "confidence": 0.90}
+
+Input: "Lake Volta water risk tomorrow"
+Output: {"city": null, "query_type": "inland_water", "crop": null, "time_reference": {"reference": "tomorrow", "days_ahead": 1}, "confidence": 0.88}
+
 MULTI-ENTITY QUERIES:
 Input: "Maize planting conditions in Kumasi tomorrow morning"
 Output: {"city": "Kumasi", "query_type": "crop_advice", "crop": "maize", "time_reference": {"reference": "tomorrow", "days_ahead": 1, "time_of_day": "morning"}, "confidence": 0.91}
@@ -212,7 +227,7 @@ SECTION 8: STRICT OUTPUT SCHEMA
 ═══════════════════════════════════════════════════════════════════════════════
 {
   "city": "<string from GHANA_CITIES | null>",
-  "query_type": "<weather|forecast|eto|gdd|soil|seasonal|seasonal_onset|seasonal_cessation|dry_spell|season_length|crop_advice|dekadal|help|greeting>",
+  "query_type": "<weather|forecast|marine|inland_water|eto|gdd|soil|seasonal|seasonal_onset|seasonal_cessation|dry_spell|season_length|crop_advice|dekadal|help|greeting>",
   "crop": "<string from CROPS | null>",
   "time_reference": {
     "reference": "<now|today|tomorrow|this_week|next_week|weekend>",
@@ -858,6 +873,14 @@ class GroqProvider:
             query_type = QueryType.GREETING
         elif message_lower.strip() == "hi":
             query_type = QueryType.GREETING
+        elif any(word in message_lower for word in [
+            "inland water", "lake", "river", "lagoon", "volta", "akosombo", "kpong"
+        ]):
+            query_type = QueryType.INLAND_WATER
+        elif any(word in message_lower for word in [
+            "marine", "sea", "ocean", "wave", "swell", "tide", "offshore", "coastal", "coast"
+        ]):
+            query_type = QueryType.MARINE
         elif any(word in message_lower for word in ["eto", "evapotranspiration", "evaporation"]):
             query_type = QueryType.ETO
         elif any(word in message_lower for word in ["gdd", "degree day", "growth stage"]):
@@ -1070,6 +1093,7 @@ class GroqProvider:
         intent: IntentExtraction,
         weather_data: WeatherData | None = None,
         forecast_data: ForecastData | None = None,
+        marine_data: MarineForecastData | None = None,
         agromet_data: AgroMetData | None = None,
         gdd_data: GDDData | None = None,
         seasonal_data: SeasonalOutlook | None = None,
@@ -1088,6 +1112,7 @@ class GroqProvider:
             intent: Extracted intent from user message.
             weather_data: Current weather data if available.
             forecast_data: Forecast data if available.
+            marine_data: Marine or inland water forecast data if available.
             agromet_data: Agrometeorological data if available.
             gdd_data: Growing degree days data if available.
             seasonal_data: Seasonal outlook if available.
@@ -1113,18 +1138,20 @@ class GroqProvider:
             QueryType.DRY_SPELL,
             QueryType.SEASON_LENGTH,
             QueryType.DEKADAL,
+            QueryType.MARINE,
+            QueryType.INLAND_WATER,
         )
 
         if intent.query_type in template_query_types:
             return self._generate_template_response(
-                intent, weather_data, forecast_data, agromet_data, gdd_data,
+                intent, weather_data, forecast_data, marine_data, agromet_data, gdd_data,
                 seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
         # Use AI only for complex queries (crop advice)
         if not self.ai_enabled:
             return self._generate_template_response(
-                intent, weather_data, forecast_data, agromet_data, gdd_data,
+                intent, weather_data, forecast_data, marine_data, agromet_data, gdd_data,
                 seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
@@ -1151,7 +1178,7 @@ class GroqProvider:
         except Exception as e:
             logger.warning(f"Groq response generation failed: {e}, using template")
             return self._generate_template_response(
-                intent, weather_data, forecast_data, agromet_data, gdd_data,
+                intent, weather_data, forecast_data, marine_data, agromet_data, gdd_data,
                 seasonal_data, seasonal_forecast, user_context, skip_greeting
             )
 
@@ -1385,6 +1412,7 @@ class GroqProvider:
         intent: IntentExtraction,
         weather_data: WeatherData | None = None,
         forecast_data: ForecastData | None = None,
+        marine_data: MarineForecastData | None = None,
         agromet_data: AgroMetData | None = None,
         gdd_data: GDDData | None = None,
         seasonal_data: SeasonalOutlook | None = None,
@@ -1414,7 +1442,8 @@ class GroqProvider:
             return (
                 f"{greeting}"
                 "I'm your weather assistant. I can help with:\n"
-                "☀️ Weather  📅 Forecasts  🌱 Farming advice\n\n"
+                "☀️ Weather  📅 Forecasts  🌱 Farming advice\n"
+                "🌊 Marine & inland water updates\n\n"
                 "What would you like to know?"
             )
 
@@ -1425,7 +1454,9 @@ class GroqProvider:
                 '☀️ "weather in Kumasi"\n'
                 '📅 "forecast for tomorrow"\n'
                 '🌱 "crop advice for maize"\n'
-                '🪴 "soil moisture"\n\n'
+                '🪴 "soil moisture"\n'
+                '🌊 "marine forecast for Tema"\n'
+                '🌊 "Lake Volta water risk"\n\n'
                 "Just ask naturally!"
             )
 
@@ -1441,6 +1472,10 @@ class GroqProvider:
 
         if intent.query_type == QueryType.SEASON_LENGTH and seasonal_forecast:
             return f"{greeting}" + self._format_season_length_response(seasonal_forecast)
+
+        if intent.query_type in (QueryType.MARINE, QueryType.INLAND_WATER) and marine_data:
+            from app.services.marine import format_marine_response
+            return f"{greeting}" + format_marine_response(marine_data)
 
         if weather_data:
             # Get condition emoji and display name

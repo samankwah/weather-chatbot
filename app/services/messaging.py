@@ -344,8 +344,18 @@ def get_complexity_for_query(query_type: str) -> str:
         Complexity level: "short", "medium", or "long".
     """
     short_queries = {"greeting", "help"}
-    long_queries = {"forecast", "seasonal", "seasonal_onset", "seasonal_cessation",
-                    "dry_spell", "season_length", "crop_advice", "dekadal"}
+    long_queries = {
+        "forecast",
+        "seasonal",
+        "seasonal_onset",
+        "seasonal_cessation",
+        "dry_spell",
+        "season_length",
+        "crop_advice",
+        "dekadal",
+        "marine",
+        "inland_water",
+    }
 
     if query_type in short_queries:
         return "short"

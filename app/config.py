@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # Open-Meteo Configuration (FREE - no API key needed)
     open_meteo_base_url: str = "https://api.open-meteo.com/v1"
     open_meteo_forecast_days: int = 16
+    open_meteo_marine_url: str = "https://marine-api.open-meteo.com/v1/marine"
 
     # Memory Configuration
     memory_ttl_seconds: int = 3600

@@ -14,6 +14,7 @@ from app.models.ai_schemas import (
     ForecastData,
     GDDData,
     IntentExtraction,
+    MarineForecastData,
     QueryType,
     SeasonalForecast,
     SeasonalOutlook,
@@ -39,6 +40,11 @@ from app.services.messaging import (
     get_complexity_for_query,
     get_messaging_provider,
     simulate_typing_delay,
+)
+from app.services.marine import (
+    detect_water_query,
+    get_marine_forecast,
+    resolve_water_location,
 )
 from app.services.location import (
     create_pending_clarification,
@@ -400,42 +406,60 @@ async def process_message(
         elif input_lower in GHANA_CITIES:
             intent.city = input_lower.title()
 
+    # Detect marine/inland water queries from keywords (fallback)
+    water_intent = detect_water_query(normalized_message)
+    if water_intent and intent.query_type in (QueryType.WEATHER, QueryType.FORECAST):
+        intent.query_type = water_intent
+
     # --- LOCATION RESOLUTION ---
     # Resolve location using geocoding with priority:
     # 1. GPS coordinates from WhatsApp location share
     # 2. Geocoded city name from user's message
     # 3. Stored home location from context
     # 4. Prompt user to share location
-    location_result = await resolve_location(
-        intent_city=intent.city,
-        latitude=latitude,
-        longitude=longitude,
-        user_context=user_context,
-    )
+    water_location = None
+    if intent.query_type in (QueryType.MARINE, QueryType.INLAND_WATER):
+        water_location = resolve_water_location(
+            message=normalized_message,
+            intent_city=intent.city,
+            latitude=latitude,
+            longitude=longitude,
+            query_type=intent.query_type,
+        )
+        final_lat = water_location.latitude
+        final_lon = water_location.longitude
+        resolved_city = water_location.name
+    else:
+        location_result = await resolve_location(
+            intent_city=intent.city,
+            latitude=latitude,
+            longitude=longitude,
+            user_context=user_context,
+        )
 
-    # Handle location prompt (new user with no location)
-    if location_result.needs_location_prompt:
-        response = location_result.clarification_message or get_location_prompt_message()
-        memory_store.add_assistant_message(user_id, response)
-        return response, "location_prompt"
+        # Handle location prompt (new user with no location)
+        if location_result.needs_location_prompt:
+            response = location_result.clarification_message or get_location_prompt_message()
+            memory_store.add_assistant_message(user_id, response)
+            return response, "location_prompt"
 
-    # Handle location clarification (ambiguous place name)
-    if location_result.needs_clarification:
-        # Store pending clarification state
-        if location_result.clarification_options:
-            pending = create_pending_clarification(
-                intent.city or "unknown",
-                location_result.clarification_options,
-            )
-            memory_store.set_pending_clarification(user_id, pending)
-        response = location_result.clarification_message or "Please select a location."
-        memory_store.add_assistant_message(user_id, response)
-        return response, "location_clarification"
+        # Handle location clarification (ambiguous place name)
+        if location_result.needs_clarification:
+            # Store pending clarification state
+            if location_result.clarification_options:
+                pending = create_pending_clarification(
+                    intent.city or "unknown",
+                    location_result.clarification_options,
+                )
+                memory_store.set_pending_clarification(user_id, pending)
+            response = location_result.clarification_message or "Please select a location."
+            memory_store.add_assistant_message(user_id, response)
+            return response, "location_clarification"
 
-    # Use resolved location coordinates
-    final_lat = location_result.location.latitude if location_result.location else None
-    final_lon = location_result.location.longitude if location_result.location else None
-    resolved_city = location_result.location.city if location_result.location else None
+        # Use resolved location coordinates
+        final_lat = location_result.location.latitude if location_result.location else None
+        final_lon = location_result.location.longitude if location_result.location else None
+        resolved_city = location_result.location.city if location_result.location else None
 
     # Update intent city with resolved name if we geocoded it
     if resolved_city and not intent.city:
@@ -444,6 +468,7 @@ async def process_message(
     # Route based on query type and fetch data
     weather_data: WeatherData | None = None
     forecast_data: ForecastData | None = None
+    marine_data: MarineForecastData | None = None
     agromet_data: AgroMetData | None = None
     gdd_data: GDDData | None = None
     seasonal_data: SeasonalOutlook | None = None
@@ -466,6 +491,26 @@ async def process_message(
 
         elif intent.query_type == QueryType.FORECAST:
             forecast_data = await _get_forecast_data(intent, final_lat, final_lon)
+
+        elif intent.query_type in (QueryType.MARINE, QueryType.INLAND_WATER):
+            if not water_location:
+                water_location = resolve_water_location(
+                    message=normalized_message,
+                    intent_city=intent.city,
+                    latitude=final_lat,
+                    longitude=final_lon,
+                    query_type=intent.query_type,
+                )
+            marine_response = await get_marine_forecast(water_location)
+            if marine_response.success and marine_response.data:
+                marine_data = marine_response.data
+            else:
+                response = marine_response.error_message or (
+                    "I couldn't fetch marine data right now. "
+                    "Please try again later or check GMet updates."
+                )
+                memory_store.add_assistant_message(user_id, response)
+                return response, intent.query_type.value
 
         elif intent.query_type == QueryType.ETO:
             agromet_response = await get_agromet_data(final_lat, final_lon, 7)
@@ -527,6 +572,7 @@ async def process_message(
         intent=intent,
         weather_data=weather_data,
         forecast_data=forecast_data,
+        marine_data=marine_data,
         agromet_data=agromet_data,
         gdd_data=gdd_data,
         seasonal_data=seasonal_data,
