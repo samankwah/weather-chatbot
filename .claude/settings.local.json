@@ -16,7 +16,17 @@
       "Bash(taskkill //F //PID 20388)",
       "Bash(taskkill //F //PID 18912)",
       "Bash(git push:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(pip show:*)",
+      "Bash(pip index:*)",
+      "Bash(dir /b \"C:\\\\Users\\\\CRAFT\\\\Desktop\\\\future MEST projects\\\\Backend\\\\weather-chatbot\\\\.env*\")",
+      "Bash(dir \"C:\\\\Users\\\\CRAFT\\\\Desktop\\\\future MEST projects\\\\Backend\\\\weather-chatbot\"\" 2>nul | findstr \".env \")",
+      "Bash(xxd:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd voice-to-text ASR feature using Groq Whisper Large v3\n\n- Add transcription service \\(app/services/transcription.py\\) using Groq Whisper\n- Update webhook to handle voice messages from WhatsApp \\(MediaUrl0, MediaContentType0\\)\n- Add Whisper configuration options to config.py\n- Upgrade groq SDK to >=0.11.0 for audio transcription API support\n- Update .env.example with Whisper configuration documentation\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
