@@ -12,6 +12,8 @@ class QueryType(str, Enum):
 
     WEATHER = "weather"
     FORECAST = "forecast"
+    MARINE = "marine"
+    INLAND_WATER = "inland_water"
     ETO = "eto"
     GDD = "gdd"
     SOIL = "soil"
@@ -151,6 +153,69 @@ class ForecastResponse(BaseModel):
 
     success: bool
     data: Optional[ForecastData] = None
+    error_message: Optional[str] = None
+
+
+class MarineHourlyData(BaseModel):
+    """Model for hourly marine or inland water conditions."""
+
+    time: str
+    wave_height: Optional[float] = None
+    wave_direction: Optional[float] = None
+    wave_period: Optional[float] = None
+    swell_wave_height: Optional[float] = None
+    swell_wave_direction: Optional[float] = None
+    swell_wave_period: Optional[float] = None
+    wind_wave_height: Optional[float] = None
+    wind_wave_direction: Optional[float] = None
+    wind_wave_period: Optional[float] = None
+    ocean_temperature: Optional[float] = None
+    ocean_current_velocity: Optional[float] = None
+    wind_speed: Optional[float] = None
+    wind_direction: Optional[float] = None
+    precipitation_probability: Optional[float] = None
+    weathercode: Optional[int] = None
+
+
+class MarineWindowSummary(BaseModel):
+    """Model for summarized 12h/24h marine risk windows."""
+
+    label: str
+    start: str
+    end: str
+    wave_height_max: Optional[float] = None
+    wave_height_mean: Optional[float] = None
+    wind_speed_max: Optional[float] = None
+    precip_probability_max: Optional[float] = None
+    ocean_temp_mean: Optional[float] = None
+    current_speed_mean: Optional[float] = None
+    thunderstorm_risk: bool = False
+    sea_state: str = "Unknown"
+    likelihood: str = "Low"
+    impact: str = "Low"
+    risk_label: str = "Low"
+    risk_emoji: str = "🟢"
+
+
+class MarineForecastData(BaseModel):
+    """Model for marine and inland water forecast data."""
+
+    latitude: float
+    longitude: float
+    location_name: str
+    timezone: str
+    hourly: list[MarineHourlyData] = Field(default_factory=list)
+    windows: list[MarineWindowSummary] = Field(default_factory=list)
+    source: str
+    is_inland: bool = False
+    location_note: Optional[str] = None
+
+
+class MarineForecastResponse(BaseModel):
+    """Model for marine forecast API response."""
+
+    success: bool
+    data: Optional[MarineForecastData] = None
     error_message: Optional[str] = None
 
 
