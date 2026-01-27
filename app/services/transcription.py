@@ -68,41 +68,48 @@ class GroqWhisperProvider:
         auth: tuple[str, str] | None = None,
     ) -> tuple[bytes | None, str | None]:
         """
-        Download audio file from URL.
+        Download audio file from Twilio media URL.
+
+        Twilio media URLs are public by default (no auth needed).
+        We try without auth first, with auth as fallback for users
+        who have enabled HTTP Basic Auth in their Twilio Console.
 
         Args:
             audio_url: URL to download audio from.
-            auth: Optional (username, password) tuple for basic auth.
+            auth: Optional (username, password) tuple for basic auth fallback.
 
         Returns:
             Tuple of (audio_bytes, content_type) or (None, None) if download failed.
         """
-        try:
-            logger.info(f"Downloading audio from: {audio_url[:50]}...")
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                if auth:
-                    response = await client.get(audio_url, auth=auth)
-                else:
-                    response = await client.get(audio_url)
+        import requests  # Use requests for more reliable redirect handling
 
-                if response.status_code == 200:
-                    content_type = response.headers.get("content-type", "audio/ogg")
-                    logger.info(
-                        f"Downloaded audio: {len(response.content)} bytes, "
-                        f"content-type: {content_type}"
-                    )
-                    return response.content, content_type
-                else:
-                    logger.error(
-                        f"Failed to download audio: HTTP {response.status_code}, "
-                        f"body: {response.text[:200]}"
-                    )
-                    return None, None
-        except httpx.TimeoutException:
-            logger.error(f"Timeout downloading audio from {audio_url}")
+        try:
+            logger.info(f"Downloading audio from: {audio_url}")
+
+            # Use requests library for more reliable Twilio redirect handling
+            # Try WITHOUT auth first (Twilio media is public by default)
+            response = requests.get(audio_url, timeout=30, allow_redirects=True)
+            logger.info(f"Response: HTTP {response.status_code}, Final URL: {response.url[:80]}...")
+
+            # If unauthorized and we have auth, retry with auth
+            if response.status_code in (401, 403) and auth:
+                logger.info("Unauthorized, retrying with auth...")
+                response = requests.get(audio_url, auth=auth, timeout=30, allow_redirects=True)
+                logger.info(f"With auth: HTTP {response.status_code}")
+
+            if response.status_code == 200:
+                content_type = response.headers.get("content-type", "audio/ogg")
+                logger.info(f"Downloaded: {len(response.content)} bytes, type: {content_type}")
+                return response.content, content_type
+
+            logger.error(f"Download failed: HTTP {response.status_code}, body: {response.text[:300]}")
+            return None, None
+
+        except requests.Timeout:
+            logger.error("Timeout downloading audio")
             return None, None
         except Exception as e:
-            logger.error(f"Error downloading audio: {e}", exc_info=True)
+            logger.error(f"Download error: {e}", exc_info=True)
             return None, None
 
     async def transcribe_audio(
