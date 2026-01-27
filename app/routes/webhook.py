@@ -142,6 +142,9 @@ async def twilio_webhook(
 
     settings = get_settings()
 
+    # DEBUG: Log media parameters to diagnose voice message handling
+    logger.info(f"Webhook received - NumMedia: {NumMedia}, MediaUrl0: {MediaUrl0}, MediaContentType0: {MediaContentType0}")
+
     # Parse coordinates if shared
     lat: float | None = None
     lon: float | None = None
@@ -154,10 +157,25 @@ async def twilio_webhook(
 
     # Handle voice message transcription
     message_to_process = Body
-    if NumMedia > 0 and MediaUrl0 and MediaContentType0:
-        # Check if it's an audio message (voice note)
-        if MediaContentType0.startswith("audio/"):
-            logger.info(f"Received voice message from {From}: {MediaContentType0}")
+    if NumMedia > 0 and MediaUrl0:
+        base_content_type = (
+            MediaContentType0.split(";")[0].strip().lower()
+            if MediaContentType0
+            else None
+        )
+        is_audio = bool(base_content_type and base_content_type.startswith("audio/"))
+
+        # Twilio sometimes reports voice notes as application/octet-stream
+        if base_content_type == "application/octet-stream":
+            is_audio = True
+            logger.info(
+                "MediaContentType0 is application/octet-stream; attempting audio transcription"
+            )
+
+        if is_audio:
+            logger.info(
+                f"Received voice message from {From}: {MediaContentType0 or 'unknown'}"
+            )
             transcription_provider = get_transcription_provider()
 
             # Twilio media URLs require authentication
@@ -175,12 +193,12 @@ async def twilio_webhook(
                 # Transcription failed - send helpful error message
                 messaging_provider = get_messaging_provider()
                 error_response = (
-                    "🎤 I received your voice message but couldn't transcribe it. "
+                    "\U0001F3A4 I received your voice message but couldn't transcribe it. "
                     "Please try again or send a text message instead.\n\n"
                     "You can ask things like:\n"
-                    "• What's the weather in Accra?\n"
-                    "• Will it rain tomorrow?\n"
-                    "• Weather forecast for Kumasi"
+                    "\u2022 What's the weather in Accra?\n"
+                    "\u2022 Will it rain tomorrow?\n"
+                    "\u2022 Weather forecast for Kumasi"
                 )
                 messaging_provider.send_message(From, error_response)
                 return WebhookResponse(
@@ -189,7 +207,9 @@ async def twilio_webhook(
                 )
         else:
             # Non-audio media (image, video, etc.)
-            logger.info(f"Received non-audio media from {From}: {MediaContentType0}")
+            logger.info(
+                f"Received non-audio media from {From}: {MediaContentType0 or 'unknown'}"
+            )
             # If there's text with the media, use that
             if not Body:
                 messaging_provider = get_messaging_provider()
