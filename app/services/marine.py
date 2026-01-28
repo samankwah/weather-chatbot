@@ -253,8 +253,7 @@ def format_marine_response(data: MarineForecastData) -> str:
         f"{window_24h.risk_emoji} {window_24h.risk_label}"
     )
 
-    footer = f"\nSource: {data.source}"
-    return f"{summary}\n{table}{footer}"
+    return f"{summary}\n{table}"
 
 
 def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHourlyData]:
