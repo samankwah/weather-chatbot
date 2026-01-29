@@ -289,6 +289,17 @@ def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHour
     marine_hourly = marine_json.get("hourly", {})
     weather_hourly = weather_json.get("hourly", {})
 
+    # Build weather lookup by timestamp for proper alignment
+    weather_times = weather_hourly.get("time", [])
+    weather_by_time: dict[str, int] = {t: i for i, t in enumerate(weather_times)}
+
+    # Helper to get weather data by timestamp
+    def _get_weather_at(key: str, time_str: str) -> float | None:
+        idx = weather_by_time.get(time_str)
+        if idx is None:
+            return None
+        return _get_at(weather_hourly, key, idx)
+
     times = marine_hourly.get("time") or weather_hourly.get("time") or []
     hourly: list[MarineHourlyData] = []
     for idx, time_str in enumerate(times):
@@ -306,11 +317,11 @@ def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHour
                 wind_wave_period=_get_at(marine_hourly, "wind_wave_period", idx),
                 ocean_temperature=_get_at(marine_hourly, "sea_surface_temperature", idx),
                 ocean_current_velocity=_get_at(marine_hourly, "ocean_current_velocity", idx),
-                wind_speed=_get_at(weather_hourly, "wind_speed_10m", idx),
-                wind_direction=_get_at(weather_hourly, "wind_direction_10m", idx),
-                precipitation_probability=_get_at(weather_hourly, "precipitation_probability", idx),
-                weathercode=_get_at(weather_hourly, "weathercode", idx),
-                visibility=_get_at(weather_hourly, "visibility", idx),
+                wind_speed=_get_weather_at("wind_speed_10m", time_str),
+                wind_direction=_get_weather_at("wind_direction_10m", time_str),
+                precipitation_probability=_get_weather_at("precipitation_probability", time_str),
+                weathercode=_get_weather_at("weathercode", time_str),
+                visibility=_get_weather_at("visibility", time_str),
                 sea_level=_get_at(marine_hourly, "sea_level_height_msl", idx),
             )
         )
