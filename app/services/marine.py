@@ -135,7 +135,7 @@ async def get_marine_forecast(
                 "wave_height", "wave_direction", "wave_period",
                 "swell_wave_height", "swell_wave_direction", "swell_wave_period",
                 "wind_wave_height", "wind_wave_direction", "wind_wave_period",
-                "ocean_temperature", "ocean_current_velocity",
+                "sea_surface_temperature", "ocean_current_velocity",
             ]
         ),
         "timezone": tz,
@@ -224,8 +224,16 @@ def format_marine_response(data: MarineForecastData) -> str:
 
     # Get human-readable descriptions
     wind_name, _ = describe_wind_speed(window.wind_speed_max)
-    wave_desc, wave_safety = describe_wave_height(window.wave_height_max)
     wind_kmh = format_wind_kmh(window.wind_speed_max)
+
+    # For inland water, estimate surface from wind if no wave data
+    if data.is_inland:
+        if window.wave_height_max is None:
+            surface_desc, surface_safety = describe_inland_surface(window.wind_speed_max)
+        else:
+            surface_desc, surface_safety = describe_wave_height(window.wave_height_max)
+    else:
+        surface_desc, surface_safety = describe_wave_height(window.wave_height_max)
 
     # Risk summary line (human-readable)
     if data.is_inland:
@@ -240,9 +248,9 @@ def format_marine_response(data: MarineForecastData) -> str:
     # Conditions section
     conditions = "\nConditions:\n"
     if data.is_inland:
-        conditions += f"• Surface: {wave_desc}\n"
+        conditions += f"• Surface: {surface_desc}\n"
     else:
-        conditions += f"• Waves: {wave_desc} - {wave_safety}\n"
+        conditions += f"• Waves: {surface_desc} - {surface_safety}\n"
     conditions += f"• Wind: {wind_name} ({wind_kmh})\n"
     conditions += f"• Rain: {format_percent(window.precip_probability_max)} chance\n"
 
@@ -275,7 +283,7 @@ def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHour
                 wind_wave_height=_get_at(marine_hourly, "wind_wave_height", idx),
                 wind_wave_direction=_get_at(marine_hourly, "wind_wave_direction", idx),
                 wind_wave_period=_get_at(marine_hourly, "wind_wave_period", idx),
-                ocean_temperature=_get_at(marine_hourly, "ocean_temperature", idx),
+                ocean_temperature=_get_at(marine_hourly, "sea_surface_temperature", idx),
                 ocean_current_velocity=_get_at(marine_hourly, "ocean_current_velocity", idx),
                 wind_speed=_get_at(weather_hourly, "wind_speed_10m", idx),
                 wind_direction=_get_at(weather_hourly, "wind_direction_10m", idx),
@@ -361,7 +369,7 @@ def _summarize_window(
     current_mean = sum(currents) / len(currents) if currents else None
     thunderstorm = any(code in (95, 96, 99) for code in weathercodes)
 
-    sea_state = classify_sea_state(wave_max)
+    sea_state = classify_sea_state(wave_max, wind_max, is_inland)
     likelihood = classify_likelihood(precip_max, wave_max, wind_max, thunderstorm)
     impact = classify_impact(wave_max, wind_max, thunderstorm, is_inland)
     risk_label, risk_emoji = map_risk(likelihood, impact)
@@ -385,17 +393,33 @@ def _summarize_window(
     )
 
 
-def classify_sea_state(wave_height: float | None) -> str:
-    """Classify sea state from wave height."""
-    if wave_height is None:
-        return "Unknown"
-    if wave_height < 1.0:
-        return "Calm"
-    if wave_height < 1.5:
-        return "Moderate"
-    if wave_height < 2.5:
-        return "Rough"
-    return "Very rough"
+def classify_sea_state(
+    wave_height: float | None,
+    wind_speed: float | None = None,
+    is_inland: bool = False,
+) -> str:
+    """Classify sea state from wave height, or wind for inland water."""
+    # For marine or when wave data exists, use wave height
+    if wave_height is not None:
+        if wave_height < 1.0:
+            return "Calm"
+        if wave_height < 1.5:
+            return "Moderate"
+        if wave_height < 2.5:
+            return "Rough"
+        return "Very rough"
+
+    # For inland water without wave data, estimate from wind
+    if is_inland and wind_speed is not None:
+        if wind_speed < 5.5:
+            return "Calm"
+        if wind_speed < 10.5:
+            return "Moderate"
+        if wind_speed < 14.0:
+            return "Rough"
+        return "Very rough"
+
+    return "Unknown"
 
 
 def classify_likelihood(
@@ -509,6 +533,24 @@ def describe_wave_height(height_meters: float | None) -> tuple[str, str]:
             return description, safety
     # Fallback for very large waves
     return "Very large waves", "stay on shore"
+
+
+def describe_inland_surface(wind_speed_ms: float | None) -> tuple[str, str]:
+    """Estimate inland water surface conditions from wind speed."""
+    if wind_speed_ms is None:
+        return "Unknown surface conditions", "check local reports"
+    # Estimate lake surface based on wind (simplified Beaufort for lakes)
+    if wind_speed_ms < 1.5:
+        return "Calm, glassy surface", "ideal for all boats"
+    if wind_speed_ms < 5.5:
+        return "Light ripples", "safe for small boats"
+    if wind_speed_ms < 8.0:
+        return "Small wavelets", "safe for canoes"
+    if wind_speed_ms < 10.5:
+        return "Choppy with small waves", "caution for small boats"
+    if wind_speed_ms < 14.0:
+        return "Moderate chop", "small boats should stay near shore"
+    return "Rough surface with whitecaps", "delay crossings if possible"
 
 
 def describe_wind_speed(speed_ms: float | None) -> tuple[str, str]:
