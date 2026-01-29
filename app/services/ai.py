@@ -2,6 +2,7 @@
 
 import json
 import logging
+import random
 from datetime import date, datetime
 from typing import Protocol
 
@@ -612,7 +613,6 @@ def get_general_tip(
     Returns:
         General weather tip string.
     """
-    import random
     desc_lower = description.lower()
 
     # Check conditions in priority order
@@ -649,7 +649,6 @@ def get_farming_tip(
     Returns:
         Farming tip string.
     """
-    import random
     desc_lower = description.lower()
 
     # Check conditions in priority order
@@ -873,21 +872,14 @@ class GroqProvider:
             query_type = QueryType.GREETING
         elif message_lower.strip() == "hi":
             query_type = QueryType.GREETING
-        elif any(word in message_lower for word in [
-            "inland water", "lake", "river", "lagoon", "volta", "akosombo", "kpong"
-        ]):
-            query_type = QueryType.INLAND_WATER
-        elif any(word in message_lower for word in [
-            "marine", "sea", "ocean", "wave", "swell", "tide", "offshore", "coastal", "coast"
-        ]):
-            query_type = QueryType.MARINE
         elif any(word in message_lower for word in ["eto", "evapotranspiration", "evaporation"]):
             query_type = QueryType.ETO
         elif any(word in message_lower for word in ["gdd", "degree day", "growth stage"]):
             query_type = QueryType.GDD
         elif any(word in message_lower for word in ["soil", "moisture"]):
             query_type = QueryType.SOIL
-        elif any(word in message_lower for word in ["onset", "start of rain", "when does rain start", "beginning of rain", "rainy season start"]):
+        # Check seasonal patterns BEFORE marine (to avoid "sea" in "season" false positive)
+        elif any(word in message_lower for word in ["onset", "start of rain", "when does rain start", "beginning of rain", "rainy season start", "season start"]):
             query_type = QueryType.SEASONAL_ONSET
         elif any(word in message_lower for word in ["cessation", "end of rain", "when does rain end", "rain stop", "rainy season end"]):
             query_type = QueryType.SEASONAL_CESSATION
@@ -897,6 +889,18 @@ class GroqProvider:
             query_type = QueryType.SEASON_LENGTH
         elif any(word in message_lower for word in ["seasonal", "outlook", "3 month", "6 month"]):
             query_type = QueryType.SEASONAL
+        # Marine/inland water checks after seasonal to avoid "sea" in "season" conflict
+        elif any(word in message_lower for word in [
+            "inland water", "lake", "river", "lagoon", "volta", "akosombo", "kpong"
+        ]):
+            query_type = QueryType.INLAND_WATER
+        elif any(word in message_lower for word in [
+            "marine", "ocean", "wave", "swell", "tide", "offshore", "coastal", "coast"
+        ]) or (
+            # Only match "sea" as a whole word (not in "season")
+            " sea " in f" {message_lower} " or message_lower.startswith("sea ") or message_lower.endswith(" sea")
+        ):
+            query_type = QueryType.MARINE
         elif any(word in message_lower for word in ["advice", "plant", "when to", "should i"]):
             query_type = QueryType.CROP_ADVICE
         elif any(word in message_lower for word in ["dekadal", "bulletin", "10-day", "10 day"]):
@@ -1291,7 +1295,6 @@ class GroqProvider:
     def _get_cessation_start(self, sf: SeasonalForecast) -> str:
         """Get the cessation monitoring start date for display."""
         from app.services.seasonal import get_cessation_start_date
-        from datetime import date
         return get_cessation_start_date(sf.region, sf.season_type, date.today().year)
 
     def _format_onset_response(self, sf: SeasonalForecast) -> str:

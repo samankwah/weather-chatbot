@@ -148,8 +148,8 @@ async def twilio_webhook(
 
     settings = get_settings()
 
-    # DEBUG: Log media parameters to diagnose voice message handling
-    logger.info(f"Webhook received - NumMedia: {NumMedia}, MediaUrl0: {MediaUrl0}, MediaContentType0: {MediaContentType0}")
+    # Log media info at debug level (only visible when DEBUG logging is enabled)
+    logger.debug(f"Webhook received - NumMedia: {NumMedia}, MediaContentType0: {MediaContentType0}")
 
     # Parse coordinates if shared
     lat: float | None = None
@@ -260,8 +260,8 @@ def is_follow_up_query(user_context: UserContext) -> bool:
     Check if this is a follow-up query within the conversation session.
 
     A query is considered a follow-up if:
-    1. There's a previous interaction within the last 5 minutes
-    2. There's at least one previous exchange in conversation history
+    1. There's a previous interaction within the configured timeout
+    2. There's at least the minimum number of messages in conversation history
 
     Args:
         user_context: User's conversation context.
@@ -272,13 +272,15 @@ def is_follow_up_query(user_context: UserContext) -> bool:
     if not user_context.last_interaction:
         return False
 
-    # Check if last interaction was within 5 minutes
+    settings = get_settings()
+
+    # Check if last interaction was within the configured timeout
     time_since_last = datetime.now() - user_context.last_interaction
-    if time_since_last.total_seconds() > 300:  # 5 minutes
+    if time_since_last.total_seconds() > settings.conversation_timeout_seconds:
         return False
 
-    # Check if there's conversation history (at least one exchange)
-    return len(user_context.conversation_history) >= 2
+    # Check if there's enough conversation history
+    return len(user_context.conversation_history) >= settings.conversation_min_history
 
 
 async def process_message(
