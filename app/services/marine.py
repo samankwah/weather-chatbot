@@ -136,6 +136,7 @@ async def get_marine_forecast(
                 "swell_wave_height", "swell_wave_direction", "swell_wave_period",
                 "wind_wave_height", "wind_wave_direction", "wind_wave_period",
                 "sea_surface_temperature", "ocean_current_velocity",
+                "sea_level_height_msl",
             ]
         ),
         "timezone": tz,
@@ -148,6 +149,7 @@ async def get_marine_forecast(
             [
                 "wind_speed_10m", "wind_direction_10m",
                 "precipitation_probability", "weathercode",
+                "visibility",
             ]
         ),
         "timezone": tz,
@@ -219,48 +221,67 @@ def format_marine_response(data: MarineForecastData) -> str:
     window = data.windows[1] if len(data.windows) > 1 else data.windows[0]
 
     # Header
-    header_type = "Inland Water Forecast" if data.is_inland else "Marine Forecast"
+    header_type = "Inland Water" if data.is_inland else "Marine Forecast"
     header = f"🌊 {header_type} - {data.location_name}\n"
 
-    # Get human-readable descriptions
-    wind_name, _ = describe_wind_speed(window.wind_speed_max)
-    wind_kmh = format_wind_kmh(window.wind_speed_max)
-
-    # For inland water, estimate surface from wind if no wave data
-    if data.is_inland:
-        if window.wave_height_max is None:
-            surface_desc, surface_safety = describe_inland_surface(window.wind_speed_max)
-        else:
-            surface_desc, surface_safety = describe_wave_height(window.wave_height_max)
-    else:
-        surface_desc, surface_safety = describe_wave_height(window.wave_height_max)
-
-    # Risk summary line (human-readable)
-    if data.is_inland:
-        summary = f"{window.risk_emoji} {window.risk_label}: {window.sea_state} surface, {wind_name.lower()}\n"
-    else:
-        summary = f"{window.risk_emoji} {window.risk_label}: {window.sea_state} seas, {wind_name.lower()}\n"
+    # Risk summary line
+    summary = f"{window.risk_emoji} {window.risk_label}: {window.sea_state} "
+    summary += "surface\n" if data.is_inland else "seas\n"
 
     # Location note if present
     if data.location_note:
         summary += f"{data.location_note}\n"
 
-    # Conditions section
-    conditions = "\nConditions:\n"
-    if data.is_inland:
-        conditions += f"• Surface: {surface_desc}\n"
+    # Get human-readable descriptions
+    wind_name, _ = describe_wind_speed(window.wind_speed_max)
+    wind_kmh = format_wind_kmh(window.wind_speed_max)
+
+    # Conditions section with actual values
+    conditions = "\n📊 Conditions:\n"
+
+    # Waves (marine only) - show actual value with description
+    if not data.is_inland:
+        wave_desc, _ = describe_wave_height(window.wave_height_max)
+        wave_val = f"{window.wave_height_max:.1f}m" if window.wave_height_max else "N/A"
+        conditions += f"• Waves: {wave_val} ({wave_desc.lower()})\n"
     else:
-        conditions += f"• Waves: {surface_desc} - {surface_safety}\n"
-    conditions += f"• Wind: {wind_name} ({wind_kmh})\n"
-    conditions += f"• Rain: {format_percent(window.precip_probability_max)} chance\n"
+        # Inland water - show surface description
+        if window.wave_height_max is None:
+            surface_desc, _ = describe_inland_surface(window.wind_speed_max)
+        else:
+            surface_desc, _ = describe_wave_height(window.wave_height_max)
+        conditions += f"• Surface: {surface_desc.lower()}\n"
 
-    # Advisory section
-    advisories = generate_water_advisory(window, data.is_inland)
-    advisory = "\n📋 Advisory:\n"
+    # Wind
+    conditions += f"• Wind: {wind_kmh} {wind_name.lower()}\n"
+
+    # Current (if available)
+    if window.current_speed_mean is not None:
+        conditions += f"• Current: {format_current(window.current_speed_mean)}\n"
+
+    # Sea temperature (if available)
+    if window.ocean_temp_mean is not None:
+        conditions += f"• Sea Temp: {window.ocean_temp_mean:.0f}°C\n"
+
+    # Visibility (if available)
+    if window.visibility_min is not None:
+        conditions += f"• Visibility: {format_visibility(window.visibility_min)}\n"
+
+    # Tide/sea level (marine only, if available)
+    if window.sea_level_mean is not None and not data.is_inland:
+        conditions += f"• Tide: {format_sea_level(window.sea_level_mean)}\n"
+
+    # Rain only if significant (>=30%)
+    if window.precip_probability_max and window.precip_probability_max >= 30:
+        conditions += f"• Rain: {window.precip_probability_max:.0f}% chance\n"
+
+    # Safety section (max 3 tips)
+    advisories = generate_water_advisory(window, data.is_inland)[:3]
+    safety = "\n📋 Safety:\n"
     for advice in advisories:
-        advisory += f"• {advice}\n"
+        safety += f"• {advice}\n"
 
-    return f"{header}{summary}{conditions}{advisory}".rstrip("\n")
+    return f"{header}{summary}{conditions}{safety}".rstrip("\n")
 
 
 def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHourlyData]:
@@ -289,6 +310,8 @@ def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHour
                 wind_direction=_get_at(weather_hourly, "wind_direction_10m", idx),
                 precipitation_probability=_get_at(weather_hourly, "precipitation_probability", idx),
                 weathercode=_get_at(weather_hourly, "weathercode", idx),
+                visibility=_get_at(weather_hourly, "visibility", idx),
+                sea_level=_get_at(marine_hourly, "sea_level_height_msl", idx),
             )
         )
     return hourly
@@ -352,6 +375,8 @@ def _summarize_window(
             impact="Low",
             risk_label="Low",
             risk_emoji="🟢",
+            visibility_min=None,
+            sea_level_mean=None,
         )
 
     wave_heights = [h.wave_height for h in hourly if h.wave_height is not None]
@@ -360,6 +385,8 @@ def _summarize_window(
     ocean_temps = [h.ocean_temperature for h in hourly if h.ocean_temperature is not None]
     currents = [h.ocean_current_velocity for h in hourly if h.ocean_current_velocity is not None]
     weathercodes = [h.weathercode for h in hourly if h.weathercode is not None]
+    visibilities = [h.visibility for h in hourly if h.visibility is not None]
+    sea_levels = [h.sea_level for h in hourly if h.sea_level is not None]
 
     wave_max = max(wave_heights) if wave_heights else None
     wave_mean = sum(wave_heights) / len(wave_heights) if wave_heights else None
@@ -367,6 +394,8 @@ def _summarize_window(
     precip_max = max(precip_probs) if precip_probs else None
     ocean_mean = sum(ocean_temps) / len(ocean_temps) if ocean_temps else None
     current_mean = sum(currents) / len(currents) if currents else None
+    visibility_min = min(visibilities) if visibilities else None
+    sea_level_mean = sum(sea_levels) / len(sea_levels) if sea_levels else None
     thunderstorm = any(code in (95, 96, 99) for code in weathercodes)
 
     sea_state = classify_sea_state(wave_max, wind_max, is_inland)
@@ -390,6 +419,8 @@ def _summarize_window(
         impact=impact,
         risk_label=risk_label,
         risk_emoji=risk_emoji,
+        visibility_min=visibility_min,
+        sea_level_mean=sea_level_mean,
     )
 
 
@@ -569,6 +600,39 @@ def format_wind_kmh(speed_ms: float | None) -> str:
         return "N/A"
     kmh = speed_ms * 3.6
     return f"{kmh:.0f} km/h"
+
+
+def format_visibility(meters: float | None) -> str:
+    """Format visibility in km with description."""
+    if meters is None:
+        return "N/A"
+    km = meters / 1000
+    if km >= 10:
+        return "10+ km (clear)"
+    if km >= 5:
+        return f"{km:.0f} km (good)"
+    if km >= 1:
+        return f"{km:.1f} km (moderate)"
+    return f"{meters:.0f}m (poor)"
+
+
+def format_sea_level(meters: float | None) -> str:
+    """Format sea level relative to normal."""
+    if meters is None:
+        return "N/A"
+    if abs(meters) < 0.1:
+        return "normal"
+    sign = "+" if meters > 0 else ""
+    return f"{sign}{meters:.1f}m"
+
+
+def format_current(ms: float | None) -> str:
+    """Format ocean current speed."""
+    if ms is None:
+        return "N/A"
+    if ms < 0.1:
+        return "calm"
+    return f"{ms:.1f} m/s"
 
 
 def get_sea_state_explanation(sea_state: str, is_inland: bool) -> str:

@@ -175,6 +175,8 @@ class MarineHourlyData(BaseModel):
     wind_direction: Optional[float] = None
     precipitation_probability: Optional[float] = None
     weathercode: Optional[int] = None
+    visibility: Optional[float] = None  # meters
+    sea_level: Optional[float] = None  # meters relative to MSL
 
 
 class MarineWindowSummary(BaseModel):
@@ -195,6 +197,8 @@ class MarineWindowSummary(BaseModel):
     impact: str = "Low"
     risk_label: str = "Low"
     risk_emoji: str = "🟢"
+    visibility_min: Optional[float] = None  # meters
+    sea_level_mean: Optional[float] = None  # meters relative to MSL
 
 
 class MarineForecastData(BaseModel):
