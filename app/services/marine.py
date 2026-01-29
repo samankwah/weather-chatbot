@@ -215,45 +215,44 @@ def format_marine_response(data: MarineForecastData) -> str:
             "Please try again later."
         )
 
-    window_12h = data.windows[0]
-    window_24h = data.windows[1] if len(data.windows) > 1 else window_12h
+    # Use 24h window for primary display (more representative)
+    window = data.windows[1] if len(data.windows) > 1 else data.windows[0]
 
-    header = "🌊 Marine Forecast" if not data.is_inland else "🌊 Inland Water Forecast"
+    # Header
+    header_type = "Inland Water Forecast" if data.is_inland else "Marine Forecast"
+    header = f"🌊 {header_type} - {data.location_name}\n"
+
+    # Get human-readable descriptions
+    wind_name, _ = describe_wind_speed(window.wind_speed_max)
+    wave_desc, wave_safety = describe_wave_height(window.wave_height_max)
+    wind_kmh = format_wind_kmh(window.wind_speed_max)
+
+    # Risk summary line (human-readable)
     if data.is_inland:
-        surface = f"{window_24h.sea_state} surface"
-        summary = (
-            f"{header} - {data.location_name}\n"
-            f"{window_24h.risk_emoji} {window_24h.risk_label}: "
-            f"{surface}; "
-            f"wind {format_maybe(window_24h.wind_speed_max, 'm/s')}, "
-            f"rain chance {format_percent(window_24h.precip_probability_max)}.\n"
-        )
+        summary = f"{window.risk_emoji} {window.risk_label}: {window.sea_state} surface, {wind_name.lower()}\n"
     else:
-        summary = (
-            f"{header} - {data.location_name}\n"
-            f"{window_24h.risk_emoji} {window_24h.risk_label}: "
-            f"{window_24h.sea_state} seas; "
-            f"waves up to {format_maybe(window_24h.wave_height_max, 'm')}, "
-            f"wind {format_maybe(window_24h.wind_speed_max, 'm/s')}, "
-            f"rain chance {format_percent(window_24h.precip_probability_max)}.\n"
-        )
+        summary = f"{window.risk_emoji} {window.risk_label}: {window.sea_state} seas, {wind_name.lower()}\n"
 
+    # Location note if present
     if data.location_note:
         summary += f"{data.location_note}\n"
 
-    table = (
-        "Period | Waves(m) | Wind(m/s) | Rain% | Risk\n"
-        f"12h | {format_range(window_12h.wave_height_mean, window_12h.wave_height_max)} | "
-        f"{format_range(window_12h.wind_speed_max, None)} | "
-        f"{format_percent(window_12h.precip_probability_max)} | "
-        f"{window_12h.risk_emoji} {window_12h.risk_label}\n"
-        f"24h | {format_range(window_24h.wave_height_mean, window_24h.wave_height_max)} | "
-        f"{format_range(window_24h.wind_speed_max, None)} | "
-        f"{format_percent(window_24h.precip_probability_max)} | "
-        f"{window_24h.risk_emoji} {window_24h.risk_label}"
-    )
+    # Conditions section
+    conditions = "\nConditions:\n"
+    if data.is_inland:
+        conditions += f"• Surface: {wave_desc}\n"
+    else:
+        conditions += f"• Waves: {wave_desc} - {wave_safety}\n"
+    conditions += f"• Wind: {wind_name} ({wind_kmh})\n"
+    conditions += f"• Rain: {format_percent(window.precip_probability_max)} chance\n"
 
-    return f"{summary}\n{table}"
+    # Advisory section
+    advisories = generate_water_advisory(window, data.is_inland)
+    advisory = "\n📋 Advisory:\n"
+    for advice in advisories:
+        advisory += f"• {advice}\n"
+
+    return f"{header}{summary}{conditions}{advisory}".rstrip("\n")
 
 
 def _merge_hourly_data(marine_json: dict, weather_json: dict) -> list[MarineHourlyData]:
@@ -452,6 +451,128 @@ def map_risk(likelihood: str, impact: str) -> tuple[str, str]:
     if impact == "Medium" and likelihood == "High":
         return "Take Action", "🔴"
     return "Be Aware", "🟡"
+
+
+# Human-readable wave height descriptions: (min_m, max_m, description, safety_note)
+WAVE_HEIGHT_DESCRIPTIONS: list[tuple[float, float, str, str]] = [
+    (0.0, 0.25, "Flat, glassy water", "ideal for all boats"),
+    (0.25, 0.5, "Small ripples", "safe for small boats"),
+    (0.5, 1.0, "Small waves (ankle to knee high)", "safe for canoes"),
+    (1.0, 1.5, "Moderate waves (knee to waist high)", "caution for small boats"),
+    (1.5, 2.0, "Rough waves (waist to chest high)", "small boats should avoid"),
+    (2.0, 2.5, "Large waves (chest high+)", "dangerous for small craft"),
+    (2.5, float("inf"), "Very large waves", "stay on shore"),
+]
+
+# Wind descriptions based on simplified Beaufort scale: (min_ms, max_ms, name, effect)
+WIND_DESCRIPTIONS: list[tuple[float, float, str, str]] = [
+    (0.0, 1.5, "Calm", "Smoke rises straight up"),
+    (1.5, 5.5, "Light breeze", "Leaves rustle, felt on face"),
+    (5.5, 8.0, "Gentle breeze", "Flags flutter, small waves"),
+    (8.0, 10.5, "Moderate breeze", "Dust and paper blow"),
+    (10.5, 14.0, "Fresh breeze", "Small trees sway"),
+    (14.0, 17.0, "Strong breeze", "Large branches move"),
+    (17.0, float("inf"), "Near gale", "Whole trees sway, dangerous"),
+]
+
+# Sea state explanations differentiated by water type
+SEA_STATE_EXPLANATIONS: dict[str, dict[str, str]] = {
+    "Calm": {
+        "marine": "Smooth waters, safe for all vessels. Ideal fishing conditions.",
+        "inland": "Lake surface like glass. Perfect for boating and fishing.",
+    },
+    "Moderate": {
+        "marine": "Some waves present. Small boats can operate with care.",
+        "inland": "Choppy surface with small waves. Stay near shore.",
+    },
+    "Rough": {
+        "marine": "Significant waves. Only experienced fishermen in sturdy boats.",
+        "inland": "Strong winds creating waves. Delay crossings if possible.",
+    },
+    "Very rough": {
+        "marine": "Dangerous conditions. All small craft should remain on shore.",
+        "inland": "Hazardous conditions. Do not go on the water.",
+    },
+    "Unknown": {
+        "marine": "Conditions uncertain. Exercise caution.",
+        "inland": "Conditions uncertain. Exercise caution.",
+    },
+}
+
+
+def describe_wave_height(height_meters: float | None) -> tuple[str, str]:
+    """Return human-readable wave description and safety note."""
+    if height_meters is None:
+        return "Unknown wave conditions", "check local reports"
+    for min_h, max_h, description, safety in WAVE_HEIGHT_DESCRIPTIONS:
+        if min_h <= height_meters < max_h:
+            return description, safety
+    # Fallback for very large waves
+    return "Very large waves", "stay on shore"
+
+
+def describe_wind_speed(speed_ms: float | None) -> tuple[str, str]:
+    """Return wind name and effect description from m/s speed."""
+    if speed_ms is None:
+        return "Unknown wind", "check local conditions"
+    for min_s, max_s, name, effect in WIND_DESCRIPTIONS:
+        if min_s <= speed_ms < max_s:
+            return name, effect
+    return "Near gale", "Whole trees sway, dangerous"
+
+
+def format_wind_kmh(speed_ms: float | None) -> str:
+    """Convert m/s to km/h string for display."""
+    if speed_ms is None:
+        return "N/A"
+    kmh = speed_ms * 3.6
+    return f"{kmh:.0f} km/h"
+
+
+def get_sea_state_explanation(sea_state: str, is_inland: bool) -> str:
+    """Return practical explanation for a sea state."""
+    water_type = "inland" if is_inland else "marine"
+    explanations = SEA_STATE_EXPLANATIONS.get(sea_state, SEA_STATE_EXPLANATIONS["Unknown"])
+    return explanations.get(water_type, explanations["marine"])
+
+
+def generate_water_advisory(window: MarineWindowSummary, is_inland: bool) -> list[str]:
+    """Generate 2-4 actionable advisory bullets based on conditions."""
+    advisories: list[str] = []
+    risk = window.risk_label
+    precip = window.precip_probability_max
+
+    # Primary advice based on risk level
+    if window.thunderstorm_risk:
+        advisories.append("Avoid water entirely - thunderstorm risk")
+        advisories.append("Seek shelter immediately if on water")
+    elif risk == "Take Action":
+        advisories.append("Stay on shore - conditions too dangerous")
+        advisories.append("Do not launch boats today")
+    elif risk == "Be Aware":
+        if is_inland:
+            advisories.append("Stay close to shore")
+            advisories.append("Experienced boaters only with caution")
+        else:
+            advisories.append("Experienced fishermen can go out with caution")
+            advisories.append("Stay within sight of shore")
+            advisories.append("Expect moderate rocking - secure all gear")
+    else:  # Low risk
+        if is_inland:
+            advisories.append("Good conditions for boating and fishing")
+            advisories.append("Safe to launch canoes and small boats")
+        else:
+            advisories.append("Good conditions for fishing")
+            advisories.append("Safe to launch canoes")
+
+    # Weather-related advice
+    if precip is not None and precip >= 50:
+        advisories.append("Plan to return before afternoon rains")
+    elif precip is not None and precip >= 30:
+        advisories.append("Bring waterproof gear - rain possible")
+
+    # Limit to 4 advisories max
+    return advisories[:4]
 
 
 def format_maybe(value: float | None, suffix: str) -> str:
