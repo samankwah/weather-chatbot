@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     typing_delay_min: float = 0.5
     typing_delay_max: float = 2.0
 
+    # Conversation Session Settings
+    conversation_timeout_seconds: int = 300  # 5 minutes - follow-up detection
+    conversation_min_history: int = 2  # Min messages for follow-up detection
+
     # Localization Settings
     default_language: str = "en"
 

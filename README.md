@@ -1,10 +1,6 @@
 # AI Agro-Weather Chatbot for Ghana Farmers
 
-<<<<<<< HEAD
-An AI-powered WhatsApp chatbot providing agricultural weather information for farmers in Ghana. Uses natural language processing to understand queries and provides weather forecasts, crop advice, and Ghana-specific seasonal information including onset/cessation predictions.
-=======
-WhatsApp-based weather chatbot for GMet. Built with FastAPI and Twilio, designed for easy migration to Meta Cloud API.
->>>>>>> 0b8ed1d82eb90c0e7d97675cc81ba9464a8d24e5
+An AI-powered WhatsApp chatbot providing agricultural weather information for farmers in Ghana. Built with FastAPI and Twilio, designed for easy migration to Meta Cloud API. Uses natural language processing to understand queries and provides weather forecasts, crop advice, marine forecasts, and Ghana-specific seasonal information.
 
 ## Features
 
@@ -29,12 +25,35 @@ WhatsApp-based weather chatbot for GMet. Built with FastAPI and Twilio, designed
 - **Southern Ghana** (below 8°N): Bimodal rainfall (Major: Mar-Jul, Minor: Sep-Nov)
 - **Northern Ghana** (above 8°N): Unimodal rainfall (Apr-Oct)
 
+### Marine & Inland Water Forecasts
+- **Marine Conditions**: Wave height, sea state, wind, currents for Ghana's coast
+- **Supported Coastal Locations**: Accra, Tema, Cape Coast, Takoradi, Keta
+- **Inland Water**: Lake Volta, Akosombo, Kpong forecasts
+- **Safety Advisories**: Risk levels and fishing recommendations
+
+### Voice Messages
+- Voice message transcription via Groq Whisper
+- Automatic language detection
+- Supports Ghanaian languages and Pidgin
+
+### Multi-Language Support
+- English, Twi/Akan, Ga, Ewe, Dagbani, Hausa
+- Regional greetings based on location
+
+### Smart Location Handling
+- WhatsApp GPS location sharing
+- Automatic geocoding with disambiguation
+- Saved home locations per user
+
 ## Tech Stack
 
 - **Framework**: FastAPI (Python 3.11+)
 - **Messaging**: Twilio WhatsApp API
 - **AI/NLU**: Groq (Llama 3.1-8B)
+- **Voice Transcription**: Groq Whisper Large v3
 - **Weather Data**: OpenWeatherMap + Open-Meteo
+- **Marine Data**: Open-Meteo Marine API
+- **Geocoding**: OpenStreetMap Nominatim
 - **Storage**: Redis (production) / In-memory (development)
 - **Rate Limiting**: slowapi (20 req/min per IP)
 
@@ -125,6 +144,10 @@ Users can send messages like:
 - "Should I plant now?"
 - "Dry spell forecast"
 - "How long is the growing season?"
+- "What's the sea condition for fishing?"
+- "Marine forecast for Tema"
+- "Lake Volta water risk"
+- (Send a voice message for transcription)
 
 ## Testing
 
@@ -153,9 +176,16 @@ weather-chatbot/
 │   │   ├── ai.py            # Groq AI/NLU service
 │   │   ├── agromet.py       # ETO, GDD, soil moisture
 │   │   ├── forecast.py      # Weather forecasts
+│   │   ├── geocoding.py     # Location resolution (Nominatim)
+│   │   ├── interactive.py   # WhatsApp buttons
+│   │   ├── localization.py  # Multi-language support
+│   │   ├── location.py      # Location parsing & disambiguation
+│   │   ├── marine.py        # Marine & inland water forecasts
 │   │   ├── memory.py        # Redis/in-memory user context
 │   │   ├── messaging.py     # Message formatting
+│   │   ├── normalizer.py    # Text/Pidgin normalization
 │   │   ├── seasonal.py      # Ghana seasonal forecasts
+│   │   ├── transcription.py # Voice message transcription
 │   │   └── weather.py       # Current weather
 │   └── models/
 │       ├── schemas.py       # Core Pydantic models
